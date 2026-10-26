@@ -196,18 +196,80 @@ internal class FreeClip2BooleanUiState {
     var values by mutableStateOf<Map<FreeClip2BooleanFeature, Boolean?>>(emptyMap())
     var head by mutableStateOf<FreeClip2HeadMotionState?>(null)
     var reading by mutableStateOf(false)
+        private set
     var writing by mutableStateOf(false)
+        private set
     val busy get() = reading || writing
-    var revision = 0
+    private var revision = 0L
     var active = true
+        private set
+    private var writeCompletion: ((Boolean) -> Unit)? = null
     var refresh: () -> Unit = {}
     var change: (FreeClip2BooleanFeature, Boolean, (Boolean) -> Unit) -> Unit = { _, _, done -> done(false) }
     var changeHead: (FreeClip2HeadMotionGesture, FreeClip2HeadMotionAction, (Boolean) -> Unit) -> Unit = { _, _, done -> done(false) }
 
-    fun finishWrite(ticket: Int, success: Boolean, done: (Boolean) -> Unit) {
+    // These methods and the controller callbacks are confined to the main thread.
+    fun activate() {
+        active = true
+        refresh()
+    }
+
+    fun deactivate() {
+        active = false
+        revision++
+        reading = false
         writing = false
-        done(success)
-        if (active && ticket != revision) refresh()
+        values = emptyMap()
+        head = null
+        val complete = writeCompletion
+        writeCompletion = null
+        // Release a retained preference's pending UI exactly once. A later transport
+        // completion must not finish this callback again or affect a new session.
+        complete?.invoke(false)
+    }
+
+    fun isCurrent(ticket: Long): Boolean = active && ticket == revision
+
+    fun beginRead(): Long? {
+        if (!active || busy) return null
+        revision++
+        reading = true
+        values = emptyMap()
+        head = null
+        return revision
+    }
+
+    fun finishRead(
+        ticket: Long,
+        actual: Map<FreeClip2BooleanFeature, Boolean?>,
+        actualHead: FreeClip2HeadMotionState?,
+    ) {
+        if (!isCurrent(ticket) || !reading) return
+        values = actual
+        head = actualHead
+        reading = false
+    }
+
+    fun beginWrite(done: (Boolean) -> Unit): Long? {
+        if (!active || busy) {
+            done(false)
+            return null
+        }
+        revision++
+        writing = true
+        writeCompletion = done
+        return revision
+    }
+
+    fun finishWrite(ticket: Long, success: Boolean, persist: () -> Boolean = { true }) {
+        if (!isCurrent(ticket) || !writing) return
+        val complete = writeCompletion
+        writeCompletion = null
+        writing = false
+        // Only a current, confirmed user write may change reconnect policy.
+        // Invalidate duplicate callbacks before running persistence or UI code.
+        val stored = success && persist()
+        complete?.invoke(stored)
     }
 
     fun updateHead(value: FreeClip2HeadMotionState?) {
@@ -223,80 +285,69 @@ private fun rememberFreeClip2BooleanSettings(address: String): FreeClip2BooleanU
     val device = remember(context, address) { context.freeClip2Device(address) }
     val state = remember(address) { FreeClip2BooleanUiState() }
     state.refresh = {
-        if (state.active && !state.busy && device != null) {
-            val revision = ++state.revision
-            state.reading = true
-            state.values = emptyMap()
-            state.head = null
-            HuaweiFreeClip2Controller.requestBooleanSettings(context, device) { values, head ->
-                if (state.active && revision == state.revision) {
-                    state.values = values
-                    state.head = head
-                    state.reading = false
+        if (device != null) {
+            state.beginRead()?.let { revision ->
+                HuaweiFreeClip2Controller.requestBooleanSettings(context, device) { values, head ->
+                    state.finishRead(revision, values, head)
                 }
             }
         }
     }
     state.change = { feature, enabled, done ->
-        if (!state.active || state.busy || device == null) done(false)
-        else {
-            val revision = ++state.revision
-            state.writing = true
+        if (device == null) done(false)
+        else state.beginWrite(done)?.let { revision ->
             val complete: (Boolean) -> Unit = { success ->
-                // 自动应用策略只由用户写入更新，读取耳机不会覆盖策略。
-                val stored = if (success && feature == FreeClip2BooleanFeature.LOW_LATENCY) {
-                    LowLatencyPrefs.setDesired(
-                        context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE),
-                        HuaweiPodsApp.xposedService, address, HuaweiDeviceRoute.HUAWEI_FREECLIP2, enabled,
-                    )
-                } else success
-                state.finishWrite(revision, stored, done)
+                state.finishWrite(revision, success) {
+                    // 自动应用策略只由当前已确认的用户写入更新，读取不会覆盖策略。
+                    if (feature == FreeClip2BooleanFeature.LOW_LATENCY) {
+                        LowLatencyPrefs.setDesired(
+                            context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE),
+                            HuaweiPodsApp.xposedService, address, HuaweiDeviceRoute.HUAWEI_FREECLIP2, enabled,
+                        )
+                    } else true
+                }
             }
             if (feature == FreeClip2BooleanFeature.HEAD_MOTION_CONTROL) {
                 HuaweiFreeClip2Controller.setHeadMotionEnabled(context, device, enabled,
-                    onState = { if (state.active && revision == state.revision) state.updateHead(it) },
+                    onState = { if (state.isCurrent(revision)) state.updateHead(it) },
                     onComplete = complete,
                 )
             } else HuaweiFreeClip2Controller.setBooleanFeatureVerified(
                 context, device, feature, enabled,
                 onState = { actual ->
-                    if (state.active && revision == state.revision) state.values = state.values + (feature to actual)
+                    if (state.isCurrent(revision)) state.values = state.values + (feature to actual)
                 },
                 onComplete = complete,
             )
         }
     }
     state.changeHead = { gesture, action, done ->
-        if (!state.active || state.busy || device == null) done(false)
-        else {
-            val revision = ++state.revision
-            state.writing = true
+        if (device == null) done(false)
+        else state.beginWrite(done)?.let { revision ->
             HuaweiFreeClip2Controller.setHeadMotionAction(context, device, gesture, action,
-                onState = { if (state.active && revision == state.revision) state.updateHead(it) },
-                onComplete = { state.finishWrite(revision, it, done) },
+                onState = { if (state.isCurrent(revision)) state.updateHead(it) },
+                onComplete = { state.finishWrite(revision, it) },
             )
         }
     }
     DisposableEffect(state, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> { state.active = true; state.refresh() }
-                Lifecycle.Event.ON_PAUSE -> {
-                    state.active = false
-                    state.revision++
-                    state.reading = false
-                }
+                Lifecycle.Event.ON_RESUME -> state.activate()
+                Lifecycle.Event.ON_PAUSE,
+                Lifecycle.Event.ON_STOP,
+                Lifecycle.Event.ON_DESTROY -> state.deactivate()
                 else -> Unit
             }
         }
-        state.active = lifecycleOwner == null || lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        state.deactivate()
         lifecycleOwner?.lifecycle?.addObserver(observer)
-        if (state.active) state.refresh()
+        if (lifecycleOwner == null || lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            state.activate()
+        }
         onDispose {
-            state.active = false
-            state.revision++
-            state.reading = false
             lifecycleOwner?.lifecycle?.removeObserver(observer)
+            state.deactivate()
         }
     }
     return state
