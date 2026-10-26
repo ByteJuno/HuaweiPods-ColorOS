@@ -16,6 +16,7 @@ import android.content.IntentFilter
 import android.os.Handler
 import android.os.Bundle
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import moe.chenxy.huaweipods.BuildConfig
 import moe.chenxy.huaweipods.pods.HuaweiHfpController
@@ -39,7 +40,6 @@ import moe.chenxy.huaweipods.coloros.queryColorOsLiveAlertAudioProfiles
 
 object HeadsetStateDispatcher : HookContext() {
     private const val ROUTE_PROBE_WATCHDOG_MS = 5_500L
-    private const val HEADSET_ICON_WATCHDOG_MS = 2_500L
 
     private var appRequestReceiverRegistered = false
     @Volatile
@@ -62,13 +62,19 @@ object HeadsetStateDispatcher : HookContext() {
     private var iconWatchdogContext: Context? = null
     @Volatile
     private var iconWatchdogRunning = false
+    private var iconWatchdogTicks = 0
     private val iconWatchdogTick = object : Runnable {
         override fun run() {
             val context = iconWatchdogContext
             if (!iconWatchdogRunning || context == null || connectedHuaweiA2dpAddresses.isEmpty()) return
+            if (!isScreenInteractive(context)) {
+                stopIconWatchdog()
+                return
+            }
             setHeadsetIcon(context, visible = true, reason = "watchdog")
+            iconWatchdogTicks = (iconWatchdogTicks + 1).coerceAtMost(4)
             if (iconWatchdogRunning) {
-                mainHandler.postDelayed(this, HEADSET_ICON_WATCHDOG_MS)
+                mainHandler.postDelayed(this, HeadsetRefreshPolicy.iconDelayMs(iconWatchdogTicks))
             }
         }
     }
@@ -223,12 +229,16 @@ object HeadsetStateDispatcher : HookContext() {
     }
 
     private fun startIconWatchdog(context: Context) {
-        if (statusBarIconUnavailable) return
+        if (statusBarIconUnavailable || !isScreenInteractive(context) || connectedHuaweiA2dpAddresses.isEmpty()) return
         iconWatchdogContext = context
         iconWatchdogRunning = true
+        iconWatchdogTicks = 0
         mainHandler.removeCallbacks(iconWatchdogTick)
-        mainHandler.postDelayed(iconWatchdogTick, HEADSET_ICON_WATCHDOG_MS)
+        mainHandler.postDelayed(iconWatchdogTick, HeadsetRefreshPolicy.iconDelayMs(iconWatchdogTicks))
     }
+
+    private fun isScreenInteractive(context: Context): Boolean =
+        context.getSystemService(PowerManager::class.java)?.isInteractive == true
 
     private fun stopIconWatchdog() {
         iconWatchdogRunning = false
@@ -393,6 +403,20 @@ object HeadsetStateDispatcher : HookContext() {
                         return
                     }
                     runCatching {
+                        // Only exact protected system actions bypass app-control sender validation.
+                        when (receivedIntent.action) {
+                            Intent.ACTION_SCREEN_OFF -> {
+                                stopIconWatchdog()
+                                return@runCatching
+                            }
+                            Intent.ACTION_SCREEN_ON -> {
+                                if (connectedHuaweiA2dpAddresses.isNotEmpty()) {
+                                    setHeadsetIcon(context, visible = true, reason = "screen-on")
+                                    startIconWatchdog(context)
+                                }
+                                return@runCatching
+                            }
+                        }
                         val action = HuaweiPodsAction.canonical(receivedIntent.action)
                         if (!HuaweiPodsBroadcastTrustPolicy.isTrustedAppControlSender(sentFromPackage)) {
                             Log.w(
@@ -445,6 +469,8 @@ object HeadsetStateDispatcher : HookContext() {
                 addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
                 addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
                 addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
                 addHuaweiPodsAction(HuaweiPodsAction.ACTION_PODS_UI_INIT)
                 addHuaweiPodsAction(HuaweiPodsAction.ACTION_REFRESH_STATUS)
                 addHuaweiPodsAction(HuaweiPodsAction.ACTION_CONNECT_POD_REQUEST)
