@@ -14,8 +14,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,6 +25,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import moe.chenxy.huaweipods.R
 import moe.chenxy.huaweipods.pods.HuaweiDeviceRoute
+import moe.chenxy.huaweipods.pods.isFreeBuds4Series
 import moe.chenxy.huaweipods.pods.HuaweiEqualizerController
 import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.Text
@@ -41,22 +40,24 @@ private val freeBuds4ePresets = listOf(
     FreeBuds4ePreset(3, R.string.freebuds5_sound_effect_treble),
 )
 
-/** FreeBuds 4E controls backed only by packets present in the 2026-08-15 guided capture. */
+/** Shared FreeBuds 4 / 4E controls: official ZA09/ZAA4 services and the 4E capture. */
 @Composable
-fun FreeBuds4eControls(address: String) {
+fun FreeBuds4eControls(address: String, route: HuaweiDeviceRoute = HuaweiDeviceRoute.HUAWEI_FREEBUDS4E) {
+    require(route.isFreeBuds4Series)
     val context = LocalContext.current
-    var selectedId by remember(address) { mutableStateOf<Int?>(null) }
-    var showDialog by remember(address) { mutableStateOf(false) }
-    var pending by remember(address) { mutableStateOf(false) }
+    val session = rememberFreeBuds4eControlSession(address, route)
+    var selectedId by session.selectedId
+    var showDialog by session.showDialog
+    val pending by session.pending
 
-    DisposableEffect(address, context) {
+    DisposableEffect(address, context, route) {
         val device = context.bluetoothDevice(address)
             ?: return@DisposableEffect onDispose { }
         var disposed = false
         HuaweiEqualizerController.requestState(
             context,
             device,
-            HuaweiDeviceRoute.HUAWEI_FREEBUDS4E,
+            route,
         ) { state ->
             if (!disposed) selectedId = state?.selectedId?.takeIf { id ->
                 freeBuds4ePresets.any { it.id == id }
@@ -107,17 +108,14 @@ fun FreeBuds4eControls(address: String) {
                                     Toast.makeText(context, R.string.connect_failed, Toast.LENGTH_SHORT).show()
                                     return@clickable
                                 }
-                                pending = true
+                                session.pending.value = true
                                 HuaweiEqualizerController.setBuiltInPreset(
                                     context,
                                     device,
-                                    HuaweiDeviceRoute.HUAWEI_FREEBUDS4E,
+                                    route,
                                     preset.id,
                                 ) { success ->
-                                    pending = false
-                                    if (success) selectedId = preset.id
-                                    showDialog = false
-                                    if (!success) {
+                                    if (session.completeWrite(preset.id, success) && !success) {
                                         Toast.makeText(
                                             context,
                                             R.string.connect_failed,

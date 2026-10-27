@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import java.util.UUID
 import moe.chenxy.huaweipods.BuildConfig
 import moe.chenxy.huaweipods.utils.miuiStrongToast.data.HuaweiPodsAction
@@ -38,6 +39,8 @@ internal object HuaweiSharedControlClient {
             return
         }
         val nonce = UUID.randomUUID().toString()
+        // 与宿主共享单调时钟期限，避免客户端已超时后宿主才提交 verified 策略。
+        val deadlineElapsed = SystemClock.elapsedRealtime() + 8_000L
         val timeout = Runnable { finish(nonce, null) }
         if (!pending.add(nonce, Pending(device.address, route, complete, timeout))) {
             complete(null)
@@ -51,6 +54,7 @@ internal object HuaweiSharedControlClient {
                 putExtra("address", device.address)
                 putExtra(HuaweiPodsAction.EXTRA_DEVICE_ROUTE, encodeHuaweiDeviceRouteForBroadcast(route))
                 putExtra("operation", operation)
+                putExtra("deadline_elapsed", deadlineElapsed)
                 putExtra("preset_id", presetId)
                 putExtra("name", name)
                 putExtra("gains", gains.toIntArray())

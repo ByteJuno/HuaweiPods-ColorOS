@@ -5,19 +5,23 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import java.util.concurrent.atomic.AtomicBoolean
 import moe.chenxy.huaweipods.BuildConfig
 import moe.chenxy.huaweipods.utils.miuiStrongToast.data.HuaweiPodsAction
 import moe.chenxy.huaweipods.utils.miuiStrongToast.data.sendIdentitySharingBroadcast
 
 internal object HuaweiSharedControlHost {
-    private val handler = Handler(Looper.getMainLooper())
+    private val handler by lazy { Handler(Looper.getMainLooper()) }
+
     fun handle(
         context: Context,
         device: BluetoothDevice,
         route: HuaweiDeviceRoute,
         intent: Intent,
         writeLowLatency: (Boolean, (Boolean) -> Unit) -> Unit,
+        writeLowLatencyVerified: (Boolean, () -> Boolean, (FreeClip2LowLatencyResult) -> Unit) -> Unit =
+            { _, _, complete -> complete(FreeClip2LowLatencyResult(null, false)) },
         stillCurrent: () -> Boolean,
     ) {
         val nonce = intent.getStringExtra("nonce")
@@ -39,16 +43,23 @@ internal object HuaweiSharedControlHost {
                 addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             })
         }
-        if (operation == HuaweiSharedControlPolicy.LOW_LATENCY_SET) {
-            if (!route.supportsLowLatencyControl || !intent.hasExtra("enabled") || !stillCurrent()) {
-                reply(null)
-            } else {
-                writeLowLatency(enabled) { success ->
-                    reply(if (success) byteArrayOf(1) else null)
-                }
-            }
-            return
-        }
+        val deadline = intent.getLongExtra("deadline_elapsed", -1L)
+        val now = SystemClock.elapsedRealtime()
+        val validDeadline = deadline > now && deadline - now <= 8_000L
+        if (dispatchLowLatency(
+                operation = operation,
+                route = route,
+                enabled = enabled.takeIf { intent.hasExtra("enabled") },
+                writeLowLatency = writeLowLatency,
+                writeLowLatencyVerified = writeLowLatencyVerified,
+                stillCurrent = {
+                    stillCurrent() &&
+                        (operation != HuaweiSharedControlPolicy.LOW_LATENCY_SET_VERIFIED ||
+                            (validDeadline && !replied.get() && SystemClock.elapsedRealtime() < deadline))
+                },
+                reply = ::reply,
+            )
+        ) return
         val query = HuaweiSharedControlPolicy.query(route, operation) ?: return reply(null)
         if (!stillCurrent()) return reply(null)
         fun readState() {
@@ -87,5 +98,53 @@ internal object HuaweiSharedControlHost {
                 if (success) handler.postDelayed({ readState() }, 250L) else reply(null)
             }
         }
+    }
+
+    /** 与广播入口共用的操作分发；verified 操作绝不能落入写出即保存的旧 setter。 */
+    internal fun dispatchLowLatency(
+        operation: String,
+        route: HuaweiDeviceRoute,
+        enabled: Boolean?,
+        writeLowLatency: (Boolean, (Boolean) -> Unit) -> Unit,
+        writeLowLatencyVerified: (Boolean, () -> Boolean, (FreeClip2LowLatencyResult) -> Unit) -> Unit,
+        stillCurrent: () -> Boolean,
+        reply: (ByteArray?) -> Unit,
+    ): Boolean {
+        if (operation != HuaweiSharedControlPolicy.LOW_LATENCY_SET &&
+            operation != HuaweiSharedControlPolicy.LOW_LATENCY_SET_VERIFIED
+        ) return false
+        if (enabled == null || !stillCurrent()) {
+            reply(null)
+            return true
+        }
+        if (operation == HuaweiSharedControlPolicy.LOW_LATENCY_SET_VERIFIED) {
+            if (route != HuaweiDeviceRoute.HUAWEI_FREECLIP2) {
+                reply(null)
+            } else {
+                writeLowLatencyVerified(enabled, stillCurrent) { result ->
+                    if (!stillCurrent()) {
+                        reply(null)
+                    } else {
+                        val state = when (result.state) {
+                            false -> 0
+                            true -> 1
+                            null -> 2
+                        }
+                        // 两字节分别表示事务提交成功和耳机实际状态；未知状态不能成为成功。
+                        reply(byteArrayOf(
+                            (if (result.success && result.state == enabled) 1 else 0).toByte(),
+                            state.toByte(),
+                        ))
+                    }
+                }
+            }
+        } else if (!route.supportsLowLatencyControl) {
+            reply(null)
+        } else {
+            writeLowLatency(enabled) { success ->
+                reply(if (success && stillCurrent()) byteArrayOf(1) else null)
+            }
+        }
+        return true
     }
 }

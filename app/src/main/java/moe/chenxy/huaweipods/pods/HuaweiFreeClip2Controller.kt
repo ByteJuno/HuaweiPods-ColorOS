@@ -15,6 +15,72 @@ object HuaweiFreeClip2Controller {
     private val HEAD_MOTION_QUERY = hex("5A0006002BB401010B289B")
     private val NOISY_VOLUME_QUERY = hex("5A0005002B8801009182")
 
+    // 2026-07-29 FreeClip 2 抓包同时包含这些查询与状态返回；只复用相同字段的编解码。
+    private val booleanReadbackCodecs = linkedMapOf(
+        FreeClip2BooleanFeature.WEAR_DETECTION to FreeBuds7Setting.WEAR_DETECTION,
+        FreeClip2BooleanFeature.DROP_REMINDER to FreeBuds7Setting.DROP_REMINDER,
+        FreeClip2BooleanFeature.ADAPTIVE_VOLUME to FreeBuds7Setting.ADAPTIVE_VOLUME,
+        FreeClip2BooleanFeature.LOW_LATENCY to FreeBuds7Setting.LOW_LATENCY,
+        FreeClip2BooleanFeature.DUAL_DEVICE to FreeBuds7Setting.AUTO_SWITCH,
+        FreeClip2BooleanFeature.CASE_PROMPT_SOUND to FreeBuds7Setting.CASE_SOUND,
+    )
+
+    internal fun booleanSettingsQueryPacket(): ByteArray =
+        booleanReadbackCodecs.values.fold(byteArrayOf()) { bytes, codec -> bytes + codec.query() } +
+            HEAD_MOTION_QUERY + NOISY_VOLUME_QUERY
+
+    internal fun parseBooleanSettings(stream: ByteArray): Map<FreeClip2BooleanFeature, Boolean?> =
+        booleanReadbackCodecs.mapValues { (_, codec) -> codec.parse(stream) } + mapOf(
+            FreeClip2BooleanFeature.HEAD_MOTION_CONTROL to parseHeadMotionState(stream)?.enabled,
+            FreeClip2BooleanFeature.NOISY_VOLUME_BOOST to parseNoisyVolumeState(stream),
+        )
+
+    fun requestBooleanSettings(
+        context: Context, device: BluetoothDevice,
+        onState: (Map<FreeClip2BooleanFeature, Boolean?>, FreeClip2HeadMotionState?) -> Unit,
+    ) {
+        var delivered = false
+        fun deliver(bytes: ByteArray) {
+            if (delivered) return
+            delivered = true
+            onState(parseBooleanSettings(bytes), parseHeadMotionState(bytes))
+        }
+        HuaweiL2capAncController.requestRawPacketOnce(
+            context, device, HuaweiDeviceRoute.HUAWEI_FREECLIP2, booleanSettingsQueryPacket(),
+            description = "freeclip2 boolean-settings", responseWindowMs = 1_500L,
+            responseComplete = { parseBooleanSettings(it).values.all { value -> value != null } },
+            onComplete = { if (!it) deliver(byteArrayOf()) }, onResponse = ::deliver,
+        )
+    }
+
+    /** UI 以耳机回读为准；通用 ACK 和本地期望值均不能证明当前开关状态。 */
+    fun setBooleanFeatureVerified(
+        context: Context, device: BluetoothDevice, feature: FreeClip2BooleanFeature, enabled: Boolean,
+        onState: (Boolean?) -> Unit, onComplete: (Boolean) -> Unit,
+    ) {
+        if (feature == FreeClip2BooleanFeature.NOISY_VOLUME_BOOST) {
+            setNoisyVolumeEnabled(context, device, enabled, onState, onComplete)
+            return
+        }
+        val codec = booleanReadbackCodecs[feature] ?: run { onComplete(false); return }
+        if (feature == FreeClip2BooleanFeature.LOW_LATENCY) {
+            // 写出、回读和策略提交都由宿主完成；不能先经过写出即保存的旧入口。
+            HuaweiLowLatencyController.setFreeClip2EnabledVerified(
+                context, device, enabled, onState, onComplete,
+            )
+        } else {
+            writeSetting(context, device, feature.packet(enabled), codec.query(), codec::parse,
+                { it == enabled }, onState, onComplete)
+        }
+    }
+
+    internal fun requestLowLatencyState(
+        context: Context, device: BluetoothDevice, onState: (Boolean?) -> Unit,
+    ) = requestSetting(
+        context, device, FreeBuds7Setting.LOW_LATENCY.query(),
+        FreeBuds7Setting.LOW_LATENCY::parse, onState,
+    )
+
     fun requestHeadMotionState(context: Context, device: BluetoothDevice, onState: (FreeClip2HeadMotionState?) -> Unit) =
         requestSetting(context, device, HEAD_MOTION_QUERY, ::parseHeadMotionState, onState)
 
@@ -235,14 +301,15 @@ object HuaweiFreeClip2Controller {
     ): FreeClip2AudioState? {
         var latest: FreeClip2AudioState? = null
         frames(stream).forEach { frame ->
-            val marker = frame.indexOfSequence(SPATIAL_AUDIO_RESPONSE_PREFIX, startIndex = 4)
-            if (marker < 0 || marker + SPATIAL_AUDIO_RESPONSE_SIZE > frame.size - CHECKSUM_SIZE) {
-                return@forEach
-            }
-            val mode = modeFromStateReportValue(frame.u8(marker + 7))
-                ?: return@forEach
-            val scene = FreeClip2SpatialScene.fromProtocolValue(frame.u8(marker + 10))
-                ?: return@forEach
+            if (frame.u8OrNull(4) != 0x2B || frame.u8OrNull(5) != 0xB4) return@forEach
+            // Parse the complete TLV area before using any value. A matching byte
+            // sequence alone cannot establish field boundaries, lengths or uniqueness.
+            val fields = frame.settingFields() ?: return@forEach
+            if (fields[1] != 0x18) return@forEach
+            val modeValue = fields[2] ?: return@forEach
+            val sceneValue = fields[3] ?: return@forEach
+            val mode = modeFromStateReportValue(modeValue) ?: return@forEach
+            val scene = FreeClip2SpatialScene.fromProtocolValue(sceneValue) ?: return@forEach
             latest = FreeClip2AudioState(mode = mode, scene = scene)
         }
         return latest
@@ -257,18 +324,10 @@ object HuaweiFreeClip2Controller {
                 return FreeClip2AudioState(effect = effect, equalizer = equalizer)
             }
         }
-        var latest: FreeClip2AudioState? = null
-        frames(stream).forEach { frame ->
-            if (frame.u8OrNull(4) != 0x2B || frame.u8OrNull(5) != 0x4A) return@forEach
-            val marker = frame.indexOfSequence(SOUND_EFFECT_RESPONSE_FIELD, startIndex = 6)
-            if (marker < 0 || marker + SOUND_EFFECT_RESPONSE_SIZE > frame.size - CHECKSUM_SIZE) {
-                return@forEach
-            }
-            val effect = FreeClip2SoundEffect.fromProtocolValue(frame.u8(marker + 2))
-                ?: return@forEach
-            latest = FreeClip2AudioState(effect = effect)
-        }
-        return latest
+        // The equalizer codec also accepts minimal built-in effect reports. Do
+        // not rescue rejected reports by scanning for 02 01 inside TLV values or
+        // across fields: only a unique, one-byte field 02 is a selected effect.
+        return null
     }
 
     /** Parses both response types when the transport returns them in the same byte stream. */
@@ -415,8 +474,7 @@ data class FreeClip2HeadMotionState(
 /**
  * FreeClip 2 耳机 AAM 空间音频协议：0=关闭、1=头部跟踪、2=固定。
  *
- * 该顺序同时由官方 API 和真机实际效果确认。FreeBuds 7i 的同类命令顺序不同，
- * 必须由它自己的控制器转换，不能再共用这里的 wire value。
+ * 该顺序同时由官方 API 和真机实际效果确认。各型号控制器负责对应的协议转换。
  */
 enum class FreeClip2SpatialAudioMode(
     val extraValue: String,
@@ -499,10 +557,6 @@ enum class FreeClip2SoundEffect(
 
 private const val HEADER_SIZE = 5
 private const val CHECKSUM_SIZE = 2
-private const val SPATIAL_AUDIO_RESPONSE_SIZE = 11
-private const val SOUND_EFFECT_RESPONSE_SIZE = 3
-private val SPATIAL_AUDIO_RESPONSE_PREFIX = hex("2BB40101180201")
-private val SOUND_EFFECT_RESPONSE_FIELD = hex("0201")
 
 private fun frames(stream: ByteArray): Sequence<ByteArray> = sequence {
     var offset = 0
@@ -571,15 +625,6 @@ private fun ByteArray.settingFields(): Map<Int, Int>? {
 }
 
 private fun Int.asBoolean(): Boolean? = when (this) { 0 -> false; 1 -> true; else -> null }
-
-private fun ByteArray.indexOfSequence(needle: ByteArray, startIndex: Int): Int {
-    if (needle.isEmpty()) return startIndex.coerceIn(0, size)
-    val lastStart = size - needle.size
-    for (index in startIndex.coerceAtLeast(0)..lastStart) {
-        if (needle.indices.all { offset -> this[index + offset] == needle[offset] }) return index
-    }
-    return -1
-}
 
 private fun ByteArray.u8(index: Int): Int = this[index].toInt() and 0xFF
 
