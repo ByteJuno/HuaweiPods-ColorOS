@@ -11,6 +11,7 @@ class PodImageProviderAccessPolicyTest {
             "io.github.artifical0.huaweipods.coloros",
             "com.android.bluetooth",
             "com.heytap.accessory",
+            "com.heytap.mydevices",
         ).forEach { assertTrue(it, PodImageProviderAccessPolicy.mayOpenImage(it)) }
 
         assertFalse(PodImageProviderAccessPolicy.mayOpenImage("com.milink.service"))
@@ -40,6 +41,7 @@ class PodImageProviderAccessPolicyTest {
         assertTrue(PodImageProviderAccessPolicy.maySubmitOfficialImageIdentity("io.github.artifical0.huaweipods.coloros"))
         assertTrue(PodImageProviderAccessPolicy.maySubmitOfficialImageIdentity("com.android.bluetooth"))
         assertFalse(PodImageProviderAccessPolicy.maySubmitOfficialImageIdentity("com.huawei.smartaudio"))
+        assertFalse(PodImageProviderAccessPolicy.maySubmitOfficialImageIdentity("com.heytap.mydevices"))
         assertFalse(PodImageProviderAccessPolicy.maySubmitOfficialImageIdentity("com.android.settings"))
         assertFalse(PodImageProviderAccessPolicy.maySubmitOfficialImageIdentity("com.example.thirdparty"))
     }

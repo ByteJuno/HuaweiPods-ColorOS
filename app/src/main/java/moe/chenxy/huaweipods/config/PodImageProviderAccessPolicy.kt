@@ -6,6 +6,7 @@ internal object PodImageProviderAccessPolicy {
     private val imageConsumerPackages = setOf(
         "com.android.bluetooth",
         "com.heytap.accessory",
+        "com.heytap.mydevices",
     )
 
     fun mayOpenImage(callingPackage: String?): Boolean =
