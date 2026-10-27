@@ -305,14 +305,15 @@ object HuaweiFreeClip2Controller {
     ): FreeClip2AudioState? {
         var latest: FreeClip2AudioState? = null
         frames(stream).forEach { frame ->
-            val marker = frame.indexOfSequence(SPATIAL_AUDIO_RESPONSE_PREFIX, startIndex = 4)
-            if (marker < 0 || marker + SPATIAL_AUDIO_RESPONSE_SIZE > frame.size - CHECKSUM_SIZE) {
-                return@forEach
-            }
-            val mode = modeFromStateReportValue(frame.u8(marker + 7))
-                ?: return@forEach
-            val scene = FreeClip2SpatialScene.fromProtocolValue(frame.u8(marker + 10))
-                ?: return@forEach
+            if (frame.u8OrNull(4) != 0x2B || frame.u8OrNull(5) != 0xB4) return@forEach
+            // Parse the complete TLV area before using any value. A matching byte
+            // sequence alone cannot establish field boundaries, lengths or uniqueness.
+            val fields = frame.settingFields() ?: return@forEach
+            if (fields[1] != 0x18) return@forEach
+            val modeValue = fields[2] ?: return@forEach
+            val sceneValue = fields[3] ?: return@forEach
+            val mode = modeFromStateReportValue(modeValue) ?: return@forEach
+            val scene = FreeClip2SpatialScene.fromProtocolValue(sceneValue) ?: return@forEach
             latest = FreeClip2AudioState(mode = mode, scene = scene)
         }
         return latest
@@ -327,18 +328,10 @@ object HuaweiFreeClip2Controller {
                 return FreeClip2AudioState(effect = effect, equalizer = equalizer)
             }
         }
-        var latest: FreeClip2AudioState? = null
-        frames(stream).forEach { frame ->
-            if (frame.u8OrNull(4) != 0x2B || frame.u8OrNull(5) != 0x4A) return@forEach
-            val marker = frame.indexOfSequence(SOUND_EFFECT_RESPONSE_FIELD, startIndex = 6)
-            if (marker < 0 || marker + SOUND_EFFECT_RESPONSE_SIZE > frame.size - CHECKSUM_SIZE) {
-                return@forEach
-            }
-            val effect = FreeClip2SoundEffect.fromProtocolValue(frame.u8(marker + 2))
-                ?: return@forEach
-            latest = FreeClip2AudioState(effect = effect)
-        }
-        return latest
+        // The equalizer codec also accepts minimal built-in effect reports. Do
+        // not rescue rejected reports by scanning for 02 01 inside TLV values or
+        // across fields: only a unique, one-byte field 02 is a selected effect.
+        return null
     }
 
     /** Parses both response types when the transport returns them in the same byte stream. */
@@ -568,10 +561,6 @@ enum class FreeClip2SoundEffect(
 
 private const val HEADER_SIZE = 5
 private const val CHECKSUM_SIZE = 2
-private const val SPATIAL_AUDIO_RESPONSE_SIZE = 11
-private const val SOUND_EFFECT_RESPONSE_SIZE = 3
-private val SPATIAL_AUDIO_RESPONSE_PREFIX = hex("2BB40101180201")
-private val SOUND_EFFECT_RESPONSE_FIELD = hex("0201")
 
 private fun frames(stream: ByteArray): Sequence<ByteArray> = sequence {
     var offset = 0
@@ -640,15 +629,6 @@ private fun ByteArray.settingFields(): Map<Int, Int>? {
 }
 
 private fun Int.asBoolean(): Boolean? = when (this) { 0 -> false; 1 -> true; else -> null }
-
-private fun ByteArray.indexOfSequence(needle: ByteArray, startIndex: Int): Int {
-    if (needle.isEmpty()) return startIndex.coerceIn(0, size)
-    val lastStart = size - needle.size
-    for (index in startIndex.coerceAtLeast(0)..lastStart) {
-        if (needle.indices.all { offset -> this[index + offset] == needle[offset] }) return index
-    }
-    return -1
-}
 
 private fun ByteArray.u8(index: Int): Int = this[index].toInt() and 0xFF
 
