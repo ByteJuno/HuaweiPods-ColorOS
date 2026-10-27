@@ -13,6 +13,41 @@ object HuaweiLowLatencyController {
     private val DISABLED_PACKET = decodeLowLatencyHex("5A0006002B6C010100B430")
     private val ENABLED_PACKET = decodeLowLatencyHex("5A0006002B6C010101A411")
 
+    /** 页面专用确认事务。没有宿主响应时失败，不回退到 App 进程争抢连接。 */
+    internal fun setFreeClip2EnabledVerified(
+        context: Context,
+        device: BluetoothDevice,
+        enabled: Boolean,
+        onState: (Boolean?) -> Unit,
+        onComplete: (Boolean) -> Unit,
+    ) {
+        val route = HuaweiDeviceRoute.HUAWEI_FREECLIP2
+        val address = runCatching { device.address }.getOrNull()
+        if (!usesSharedConnection(context.packageName, route) ||
+            address == null || !BluetoothAdapter.checkBluetoothAddress(address)
+        ) {
+            onState(null)
+            onComplete(false)
+            return
+        }
+        HuaweiSharedControlClient.request(
+            context, device, route, HuaweiSharedControlPolicy.LOW_LATENCY_SET_VERIFIED,
+            enabled = enabled,
+        ) { response ->
+            val result = response?.takeIf {
+                it.size == 2 && (it[0] == 0.toByte() || it[0] == 1.toByte()) &&
+                    it[1].toInt() in 0..2
+            }
+            val actual = when (result?.get(1)?.toInt()) {
+                0 -> false
+                1 -> true
+                else -> null
+            }
+            onState(actual)
+            onComplete(result?.get(0) == 1.toByte() && actual == enabled)
+        }
+    }
+
     fun setEnabled(
         context: Context,
         device: BluetoothDevice,

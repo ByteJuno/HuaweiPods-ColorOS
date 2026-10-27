@@ -10,6 +10,7 @@ internal object HuaweiSharedControlPolicy {
     const val WIND_READ = "wind_read"
     const val WIND_SET = "wind_set"
     const val LOW_LATENCY_SET = "low_latency_set"
+    const val LOW_LATENCY_SET_VERIFIED = "low_latency_set_verified"
 
     fun supports(route: HuaweiDeviceRoute): Boolean =
         route == HuaweiDeviceRoute.HUAWEI_FREEBUDS6I ||

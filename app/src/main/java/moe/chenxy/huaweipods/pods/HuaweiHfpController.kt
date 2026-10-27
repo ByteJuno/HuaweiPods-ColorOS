@@ -389,6 +389,7 @@ object HuaweiHfpController {
                     HuaweiSharedControlHost.handle(
                         currentContext, currentDevice, route, receivedIntent,
                         writeLowLatency = { enabled, complete -> setLowLatency(enabled, complete) },
+                        writeLowLatencyVerified = ::setFreeClip2LowLatencyVerified,
                     ) { isCurrentSession(generation, address, route) }
                 }
                 HuaweiPodsAction.ACTION_HUAWEI_WEAR_DETECTION_SET -> {
@@ -1683,6 +1684,83 @@ object HuaweiHfpController {
                 TAG,
                 "Huawei low-latency write route=$requestedRoute enabled=$requestedEnabled " +
                     "success=$success device=$requestedAddress",
+            )
+        }
+    }
+
+    private fun setFreeClip2LowLatencyVerified(
+        requestedEnabled: Boolean,
+        requestCurrent: () -> Boolean,
+        complete: (FreeClip2LowLatencyResult) -> Unit,
+    ) {
+        synchronized(sessionStateLock) {
+            val currentContext = context
+            val currentDevice = device
+            val requestedRoute = sessionRoute
+            if (currentContext == null || currentDevice == null ||
+                requestedRoute != HuaweiDeviceRoute.HUAWEI_FREECLIP2 || !requestCurrent()
+            ) {
+                complete(FreeClip2LowLatencyResult(null, false))
+                return
+            }
+            val requestedAddress = currentDevice.address
+            val requestedGeneration = sessionGeneration
+            val previousDesired = LowLatencyPrefs.desiredForHook(requestedAddress, requestedRoute) ?: false
+            val token = lowLatencyWritePolicy.beginManual()
+            cancelAutoLowLatency()
+            val stillCurrent = {
+                synchronized(sessionStateLock) {
+                    lowLatencyWritePolicy.isCurrent(token) && requestCurrent() &&
+                        isCurrentSession(requestedGeneration, requestedAddress, requestedRoute)
+                }
+            }
+            FreeClip2LowLatencyTransaction.run(
+                enabled = requestedEnabled,
+                stillCurrent = stillCurrent,
+                write = { shouldWrite, written ->
+                    HuaweiLowLatencyController.sendInHost(
+                        context = currentContext,
+                        device = currentDevice,
+                        route = requestedRoute,
+                        enabled = requestedEnabled,
+                        shouldWrite = shouldWrite,
+                        onComplete = written,
+                    )
+                },
+                read = { onState ->
+                    HuaweiFreeClip2Controller.requestLowLatencyState(currentContext, currentDevice, onState)
+                },
+                commit = {
+                    synchronized(sessionStateLock) {
+                        // 核实和提交之间也可能发生换会话、新操作或客户端超时。
+                        if (!stillCurrent()) {
+                            false
+                        } else {
+                            LowLatencyPrefs.setDesiredFromHook(requestedAddress, requestedRoute, requestedEnabled)
+                            if (requestedEnabled) {
+                                lowLatencyAppliedGeneration = requestedGeneration
+                            } else {
+                                cancelAutoLowLatency()
+                            }
+                            true
+                        }
+                    }
+                },
+                complete = { result ->
+                    synchronized(sessionStateLock) {
+                        val current = stillCurrent()
+                        val finished = lowLatencyWritePolicy.finishManual(token)
+                        val effective = if (current && finished) result else FreeClip2LowLatencyResult(null, false)
+                        if (current && finished) {
+                            // 失败不能通过状态广播把未确认的新策略带回 App。
+                            sendLowLatencyState(
+                                if (effective.success) requestedEnabled else previousDesired,
+                                writeSuccess = effective.success,
+                            )
+                        }
+                        complete(effective)
+                    }
+                },
             )
         }
     }

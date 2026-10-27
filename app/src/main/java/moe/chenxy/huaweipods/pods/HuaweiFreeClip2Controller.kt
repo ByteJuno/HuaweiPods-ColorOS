@@ -64,26 +64,22 @@ object HuaweiFreeClip2Controller {
         }
         val codec = booleanReadbackCodecs[feature] ?: run { onComplete(false); return }
         if (feature == FreeClip2BooleanFeature.LOW_LATENCY) {
-            // 保留蓝牙宿主写入，避免恢复 App 与宿主争抢连接的旧问题。
-            HuaweiLowLatencyController.setEnabled(context, device, HuaweiDeviceRoute.HUAWEI_FREECLIP2, enabled) { sent ->
-                if (!sent) {
-                    onComplete(false)
-                } else {
-                    requestSetting(context, device, codec.query(), codec::parse) { state ->
-                        fun finish(actual: Boolean?) {
-                            onState(actual)
-                            onComplete(actual == enabled)
-                        }
-                        if (state == enabled) finish(state)
-                        else requestSetting(context, device, codec.query(), codec::parse, ::finish)
-                    }
-                }
-            }
+            // 写出、回读和策略提交都由宿主完成；不能先经过写出即保存的旧入口。
+            HuaweiLowLatencyController.setFreeClip2EnabledVerified(
+                context, device, enabled, onState, onComplete,
+            )
         } else {
             writeSetting(context, device, feature.packet(enabled), codec.query(), codec::parse,
                 { it == enabled }, onState, onComplete)
         }
     }
+
+    internal fun requestLowLatencyState(
+        context: Context, device: BluetoothDevice, onState: (Boolean?) -> Unit,
+    ) = requestSetting(
+        context, device, FreeBuds7Setting.LOW_LATENCY.query(),
+        FreeBuds7Setting.LOW_LATENCY::parse, onState,
+    )
 
     fun requestHeadMotionState(context: Context, device: BluetoothDevice, onState: (FreeClip2HeadMotionState?) -> Unit) =
         requestSetting(context, device, HEAD_MOTION_QUERY, ::parseHeadMotionState, onState)
