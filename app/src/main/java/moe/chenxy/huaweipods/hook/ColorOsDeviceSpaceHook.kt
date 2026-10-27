@@ -1,6 +1,7 @@
 package moe.chenxy.huaweipods.hook
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.graphics.Bitmap
@@ -9,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.LruCache
 import android.view.View
+import android.view.ViewGroup
 import android.widget.ImageView
 import java.lang.ref.WeakReference
 import java.util.Collections
@@ -29,6 +31,7 @@ object ColorOsDeviceSpaceHook : HookContext() {
     private const val CONVERTER = "com.oplus.mydevices.quickapp.data.QuickCardDeviceDataConverter"
     private const val DATA = "com.oplus.mydevices.domain.entities.cards.QuickCardDeviceData"
     private const val DEVICE = "com.oplus.mydevices.domain.ports.device.IDevice"
+    private const val DETAIL_ACTIVITY = "com.oplus.mydevices.bluetooth.PluginPanelHostActivity"
     private val main = Handler(Looper.getMainLooper())
     private val requests = DeviceSpaceImageRequests<ImageView>()
     private val images = WeakHashMap<ImageView, OriginalImage>()
@@ -93,6 +96,44 @@ object ColorOsDeviceSpaceHook : HookContext() {
             findMethod(CARD, "setDeviceName", String::class.java))
         check(methods.all { it.returnType == Void.TYPE })
         methods.forEach { method -> hookAfter(method) { (instance as? View)?.let(::schedule) } }
+        // Hot reload does not replay native view binding. An existing panel must be
+        // rediscovered after old images are restored, and again when a paused panel resumes.
+        hookAfter(Activity::class.java.getDeclaredMethod("onPostResume")) {
+            (instance as? Activity)?.takeIf { it.javaClass.name == DETAIL_ACTIVITY }
+                ?.let { activity -> main.post { refreshActivity(activity) } }
+        }
+        main.post { refreshVisibleDetails() }
+    }
+
+    private fun refreshVisibleDetails() {
+        if (stopped) return
+        runCatching {
+            val threadType = Class.forName("android.app.ActivityThread")
+            val thread = threadType.getDeclaredMethod("currentActivityThread").invoke(null)
+            val activities = getObjectField(thread, "mActivities") as? Map<*, *> ?: return@runCatching
+            activities.values.take(16).forEach { record ->
+                val activity = getObjectField(record, "activity") as? Activity ?: return@forEach
+                refreshActivity(activity)
+            }
+        }.onFailure { Log.w(TAG, "Unable to recover visible Device Space panels", it) }
+    }
+
+    private fun refreshActivity(activity: Activity) {
+        if (stopped || activity.javaClass.name != DETAIL_ACTIVITY || activity.isDestroyed || activity.isFinishing) return
+        val root = activity.window.peekDecorView()?.takeIf { it.isAttachedToWindow && it.windowVisibility == View.VISIBLE }
+            ?: return
+        val pending = ArrayDeque<View>()
+        pending.add(root)
+        var visited = 0
+        while (pending.isNotEmpty() && visited++ < 512) {
+            val view = pending.removeFirst()
+            if (view.javaClass.name == CARD) schedule(view)
+            if (view is ViewGroup) {
+                repeat(minOf(view.childCount, (512 - visited - pending.size).coerceAtLeast(0))) { index ->
+                    pending.add(view.getChildAt(index))
+                }
+            }
+        }
     }
 
     private fun schedule(card: View) {
