@@ -14,8 +14,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,9 +45,10 @@ private val freeBuds4ePresets = listOf(
 fun FreeBuds4eControls(address: String, route: HuaweiDeviceRoute = HuaweiDeviceRoute.HUAWEI_FREEBUDS4E) {
     require(route.isFreeBuds4Series)
     val context = LocalContext.current
-    var selectedId by remember(address) { mutableStateOf<Int?>(null) }
-    var showDialog by remember(address) { mutableStateOf(false) }
-    var pending by remember(address) { mutableStateOf(false) }
+    val session = rememberFreeBuds4eControlSession(address, route)
+    var selectedId by session.selectedId
+    var showDialog by session.showDialog
+    val pending by session.pending
 
     DisposableEffect(address, context, route) {
         val device = context.bluetoothDevice(address)
@@ -109,17 +108,14 @@ fun FreeBuds4eControls(address: String, route: HuaweiDeviceRoute = HuaweiDeviceR
                                     Toast.makeText(context, R.string.connect_failed, Toast.LENGTH_SHORT).show()
                                     return@clickable
                                 }
-                                pending = true
+                                session.pending.value = true
                                 HuaweiEqualizerController.setBuiltInPreset(
                                     context,
                                     device,
                                     route,
                                     preset.id,
                                 ) { success ->
-                                    pending = false
-                                    if (success) selectedId = preset.id
-                                    showDialog = false
-                                    if (!success) {
+                                    if (session.completeWrite(preset.id, success) && !success) {
                                         Toast.makeText(
                                             context,
                                             R.string.connect_failed,
