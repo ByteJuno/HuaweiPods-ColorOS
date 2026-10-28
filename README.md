@@ -25,13 +25,22 @@ HuaweiPods ColorOS 是一个使用独立应用 ID `io.github.artifical0.huaweipo
 
 > 从 1.9.0.1 起本分支只适配 ColorOS，已移除上游的小米 / HyperOS 集成（系统蓝牙详情页、超级岛、融合设备中心等）。HyperOS 用户请使用上游 [HuaweiPods](https://github.com/Nshpiter/HuaweiPods)。
 
-> ColorOS 说明：“我的设备”入口已适配 ColorOS 16.1（`com.heytap.mydevices` 17.4.15）与 ColorOS 17（17.25.10）两代详情页。ColorOS 17 部分目前依据 OnePlus PLK110 `PLK110_17.0.0.102(CN01)` 固件静态核对，尚待实机验证。私有宿主会随系统更新变化，未知版本会退回系统原样，仍保留模块内电量、流体云和通用蓝牙详情页。
+> ColorOS 说明：“我的设备”入口已适配 ColorOS 16.1（`com.heytap.mydevices` 17.4.15）与 ColorOS 17（17.25.10）两代详情页。OnePlus PLK110 `PLK110_17.0.0.105(CN01)` / My Devices 17.25.10 / 一代 FreeClip 已实测设备空间图片、电量摘要和保持详情页打开时的热重载恢复。该结果不代表其他耳机、ROM 或关盖开盒场景均已验收；私有宿主变化时保留系统原样显示。
 
 连接手机并启用 USB 调试后，可在 Windows PowerShell 运行 `./tools/capture-coloros-environment.ps1`，生成不含日志、账号和蓝牙地址的宿主环境包，供下一阶段适配使用。
 
 > 下列机型共用一个 APK，不按型号单独分发。新增型号的 ColorOS 实机验证范围请分别查看。
 
-## 1.9.1.1（当前稳定版）
+## 1.9.2.1（当前稳定版）
+
+- 选择性移植上游 1.9.2：新增 FreeBuds 4 独立型号识别及 4E 系列基础控制复用；修正 FreeBuds 7i 固定 / 头部跟踪空间音频映射。
+- FreeClip 2 设置显示耳机回读状态，返回前台自动刷新；修复严格 TLV 解析、跨设备 / 页面会话隔离及低时延回读确认后才保存自动保持策略。
+- 修复设备空间首页与详情页把 FreeClip 显示成通用头戴耳机的问题，保留用户配色和别名，标准型号标题不再截断；保持详情浮层打开时更新模块也能恢复正确图片。
+- 连接稳定后降低图标兜底刷新频率；更新检查、维护者姓名和链接适配 GitHub 用户名 ByteJuno，更新维护者头像，并在关于页加入 [Telegram 更新频道](https://t.me/ByteJuno)。
+- 629 项单元测试通过，Lint 无错误，Release 构建及 Android 测试代码编译通过。PLK110 / ColorOS 17.0.0.105 / 一代 FreeClip 已实测官方弹窗、应用内及设备空间图片、电量、流体云和两次详情热重载；本轮未做开关盒及其他新增型号实测。
+- versionCode 28，沿用固定签名；GitHub 与独立 [LSPosed 仓库](https://github.com/Xposed-Modules-Repo/io.github.artifical0.huaweipods.coloros/releases) 同步同一稳定版 APK。详见 [发布说明与验证限制](.github/release-notes/1.9.2.1.md)。
+
+## 1.9.1.1（前一稳定版）
 
 - 新增 FreeBuds 6 型号识别、官方图片身份、电量、三档降噪及独立设置页，不复用 6i 的通透或音效编号。
 - 识别 FreeClip 2 典藏版产品 `000173`，与普通版 `000167` 官方图片身份隔离；未获取官方图时仅显示系列示意图。FreeClip 2 系列新增点头 / 摇头来电动作及“嘈杂环境大音量”设置和回读，纠正原“声音质量优先”的命名。
@@ -103,6 +112,7 @@ HuaweiPods ColorOS 是一个使用独立应用 ID `io.github.artifical0.huaweipo
 | --- | --- | --- |
 | HUAWEI FreeBuds 3 | 稳定 | 电量、降噪开关、9 档降噪空间方向、双击手势与系统界面集成 |
 | HUAWEI FreeBuds 4E | 扩展支持 | 电量、降噪 / 关闭与轻度 / 均衡两档降噪、状态回读、左右耳双击与按住、佩戴检测、轻滑音量说明、3 种官方音效和官方配色图片 |
+| HUAWEI FreeBuds 4 | 扩展支持，ColorOS 未实测 | 独立型号及图片身份；复用 4E 系列基础控制与电量路径，尚未完成该型号实机验收 |
 | HUAWEI FreeBuds 5 | 扩展支持 | 电量、降噪 / 关闭与状态回读、智慧动态 / 轻度 / 均衡三档降噪、佩戴检测、4 种官方音效、高清音质与低时延自动保持；手势设置待补充 |
 | HUAWEI FreeBuds 5i | 扩展支持 | 电量、通透 / 降噪 / 关闭与状态回读、智慧动态 / 轻度 / 均衡 / 深度四档降噪、左右耳双击、佩戴检测、4 种官方音效、高清音质、低时延自动保持与官方配色图片；长按和滑动设置待补充 |
 | HUAWEI FreeBuds SE 4 ANC | 扩展支持 | 电量、通透 / 降噪 / 关闭与状态回读、轻度 / 均衡 / 深度三档降噪、防风噪、4 种官方音效、10 段自定义均衡器、低时延自动保持与官方配色图片；手势设置待补充 |
