@@ -124,6 +124,7 @@ private const val DEVICE_CONNECT_TIMEOUT_MS = 15_000L
 private const val GITHUB_REPOSITORY_URL = "https://github.com/ByteJuno/HuaweiPods-ColorOS"
 // 开发者卡片展示本适配版维护者；“原项目”一栏保留 HuaweiPods 原作者署名与入口。
 private const val GITHUB_DEVELOPER_URL = "https://github.com/ByteJuno"
+private const val TELEGRAM_CHANNEL_URL = "https://t.me/ByteJuno"
 private const val UPSTREAM_REPOSITORY_URL = "https://github.com/Nshpiter/HuaweiPods"
 private const val GITHUB_RELEASES_URL = "$GITHUB_REPOSITORY_URL/releases"
 private const val GITHUB_ISSUES_URL = "$GITHUB_REPOSITORY_URL/issues"
@@ -998,6 +999,7 @@ internal fun MainUI(
         },
         onOpenDeveloper = { openExternalUrl(context, GITHUB_DEVELOPER_URL) },
         onOpenGitHub = { openExternalUrl(context, GITHUB_REPOSITORY_URL) },
+        onOpenChannel = { openExternalUrl(context, TELEGRAM_CHANNEL_URL) },
         onOpenChangelog = { openExternalUrl(context, GITHUB_RELEASES_URL) },
         onOpenIssues = { openExternalUrl(context, GITHUB_ISSUES_URL) },
         onOpenUpstream = { openExternalUrl(context, UPSTREAM_REPOSITORY_URL) },

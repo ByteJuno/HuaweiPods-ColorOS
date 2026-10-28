@@ -174,6 +174,8 @@
     <string name="about_developer_name">ByteJuno</string>
     <string name="about_developer_handle">@ByteJuno · ColorOS adaptation</string>
     <string name="about_source_code">Source Code</string>
+    <string name="about_channel_title">ByteJuno · Telegram channel</string>
+    <string name="about_channel_summary">Follow project updates and test builds on Telegram</string>
     <string name="about_project_section">Project</string>
     <string name="about_module_section">Module</string>
     <string name="about_upstream_section">Upstream</string>
