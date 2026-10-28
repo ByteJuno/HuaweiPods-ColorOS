@@ -108,32 +108,41 @@ object ColorOsDeviceSpaceHook : HookContext() {
     private fun refreshVisibleDetails() {
         if (stopped) return
         runCatching {
-            val threadType = Class.forName("android.app.ActivityThread")
-            val thread = threadType.getDeclaredMethod("currentActivityThread").invoke(null)
-            val activities = getObjectField(thread, "mActivities") as? Map<*, *> ?: return@runCatching
-            activities.values.take(16).forEach { record ->
-                val activity = getObjectField(record, "activity") as? Activity ?: return@forEach
-                refreshActivity(activity)
-            }
+            // The COUI detail sheet owns a Dialog window outside Activity.decorView.
+            // Inspect only this host process's windows, and match the verified native card class.
+            val windowType = Class.forName("android.view.WindowManagerGlobal")
+            val manager = windowType.getDeclaredMethod("getInstance").invoke(null)
+            val roots = (getObjectField(manager, "mViews") as? List<*>)
+                ?.filterIsInstance<View>()?.take(16) ?: return@runCatching
+            val count = roots.sumOf(::refreshRoot)
+            Log.i(TAG, "Existing detail image recovery roots=${roots.size} cards=$count")
         }.onFailure { Log.w(TAG, "Unable to recover visible Device Space panels", it) }
     }
 
     private fun refreshActivity(activity: Activity) {
         if (stopped || activity.javaClass.name != DETAIL_ACTIVITY || activity.isDestroyed || activity.isFinishing) return
-        val root = activity.window.peekDecorView()?.takeIf { it.isAttachedToWindow && it.windowVisibility == View.VISIBLE }
-            ?: return
+        refreshVisibleDetails()
+    }
+
+    private fun refreshRoot(root: View): Int {
+        if (!root.isAttachedToWindow || root.windowVisibility != View.VISIBLE) return 0
         val pending = ArrayDeque<View>()
         pending.add(root)
         var visited = 0
+        var matches = 0
         while (pending.isNotEmpty() && visited++ < 512) {
             val view = pending.removeFirst()
-            if (view.javaClass.name == CARD) schedule(view)
+            if (view.javaClass.name == CARD) {
+                schedule(view)
+                matches++
+            }
             if (view is ViewGroup) {
                 repeat(minOf(view.childCount, (512 - visited - pending.size).coerceAtLeast(0))) { index ->
                     pending.add(view.getChildAt(index))
                 }
             }
         }
+        return matches
     }
 
     private fun schedule(card: View) {
@@ -174,7 +183,11 @@ object ColorOsDeviceSpaceHook : HookContext() {
         runCatching {
             worker.execute {
                 val bitmap = runCatching { PodImageLoader.loadDeviceSpaceBitmap(app, address, route) }.getOrNull()
-                if (stopped || bitmap == null) return@execute
+                if (stopped) return@execute
+                if (bitmap == null) {
+                    Log.w(TAG, "Detail image decode unavailable; retaining native image")
+                    return@execute
+                }
                 cache.put(identity, bitmap)
                 main.post {
                     val target = reference.get() ?: return@post
