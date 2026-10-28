@@ -22,6 +22,10 @@ import moe.chenxy.huaweipods.pods.isSupported
 object PodImageLoader {
     private const val MAX_CUSTOM_IMAGE_DIMENSION = 768
 
+    /** System hosts read fallback assets through the app, independent of host resource caches. */
+    fun loadDeviceSpaceBitmap(context: Context, address: String, route: HuaweiDeviceRoute): Bitmap? =
+        decodeUri(context, PodImagePrefs.deviceSpaceImageUri(address, route))
+
     fun loadBitmap(
         context: Context,
         prefs: SharedPreferences,

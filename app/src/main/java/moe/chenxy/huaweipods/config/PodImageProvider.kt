@@ -8,6 +8,9 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.os.Bundle
 import moe.chenxy.huaweipods.HuaweiPodsApp
+import moe.chenxy.huaweipods.BuildConfig
+import moe.chenxy.huaweipods.R
+import moe.chenxy.huaweipods.utils.PodImageLoader
 import moe.chenxy.huaweipods.pods.HuaweiDeviceInfoRoutePolicy
 import moe.chenxy.huaweipods.smartaudio.OfficialImageIdentityBridge
 import moe.chenxy.huaweipods.smartaudio.SmartAudioImageCache
@@ -23,6 +26,12 @@ class PodImageProvider : ContentProvider() {
         if (!PodImageProviderAccessPolicy.mayOpenImage(resolveCallingPackages(context))) {
             throw SecurityException("Caller is not an active HuaweiPods image scope")
         }
+        if (uri.pathSegments.firstOrNull() == "device") {
+            val request = PodPresentationImagePolicy.parse(uri.pathSegments) ?: return null
+            return presentationImage(context, request)?.let {
+                ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY)
+            }
+        }
         val fileName = uri.lastPathSegment ?: return null
         val prefs = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
         val allowedNames = PodImagePrefs.load(prefs).flatMap { earphone ->
@@ -37,6 +46,37 @@ class PodImageProvider : ContentProvider() {
         val file = File(dir, fileName).canonicalFile
         if (!file.path.startsWith(dir.canonicalPath) || !file.isFile) return null
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    }
+
+    /** Use the same exact device and priority as the app; a host cannot select an arbitrary file. */
+    private fun presentationImage(context: Context, request: PodPresentationImagePolicy.Request): File? {
+        val prefs = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+        val record = PodImagePrefs.find(prefs, request.address)
+        val imageDir = PodImagePrefs.imageDir(context).canonicalFile
+        PodPresentationImagePolicy.candidatePaths(request, record).forEach { path ->
+            val image = File(imageDir, File(path).name).canonicalFile
+            if (image.parentFile == imageDir && image.isFile) return image
+        }
+        // Copy only the known drawable's bytes, never its APK file descriptor/offset.
+        return synchronized(presentationImageLock) {
+            val directory = File(context.cacheDir, "device_space_images").apply { mkdirs() }
+            val image = File(directory, "${request.route.name}.img")
+            if (!image.isFile || image.lastModified() < BuildConfig.BUILD_TIMESTAMP) {
+                val temporary = File.createTempFile("image-", ".tmp", directory)
+                try {
+                    val drawable = PodImageLoader.modelFallbackResId(
+                        request.route, PodImageResource.BOX, R.drawable.img_box,
+                    )
+                    context.resources.openRawResource(drawable).use { input ->
+                        temporary.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    if (!temporary.renameTo(image)) return@synchronized null
+                } finally {
+                    temporary.delete()
+                }
+            }
+            image
+        }
     }
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
@@ -110,5 +150,9 @@ class PodImageProvider : ContentProvider() {
         runCatching { callingPackage }.getOrNull()?.let(::add)
         context.packageManager.getPackagesForUid(android.os.Binder.getCallingUid())
             ?.forEach(::add)
+    }
+
+    companion object {
+        private val presentationImageLock = Any()
     }
 }

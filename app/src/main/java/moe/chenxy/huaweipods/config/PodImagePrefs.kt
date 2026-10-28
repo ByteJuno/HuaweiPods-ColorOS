@@ -54,6 +54,12 @@ object PodImagePrefs {
     private const val MAX_CLOUD_IDENTITIES = 16
     /** 与 Manifest 中的 `${applicationId}.podimages` 保持一致，独立包名下不能指向原版 HuaweiPods。 */
     const val AUTHORITY = "${BuildConfig.APPLICATION_ID}.podimages"
+
+    /** The provider resolves current manual/official/bundled images in its own app context. */
+    fun deviceSpaceImageUri(address: String, route: moe.chenxy.huaweipods.pods.HuaweiDeviceRoute, revision: Int = 0): Uri =
+        Uri.Builder().scheme("content").authority(AUTHORITY)
+            .appendPath("device").appendPath(route.name).appendPath(address)
+            .appendQueryParameter("v", "${BuildConfig.MODULE_BUILD_ID}-$revision").build()
     private const val PREF_KEY_EARPHONES = "earphone_prefs_json"
     private const val PREF_KEY_CLOUD_IDENTITIES = "cloud_image_identities_json"
     private const val IMAGE_DIR = "pod_images"

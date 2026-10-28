@@ -86,6 +86,7 @@ internal data class AboutPageActions(
     val onPreviewUpdateDialog: (() -> Unit)?,
     val onOpenDeveloper: () -> Unit,
     val onOpenGitHub: () -> Unit,
+    val onOpenChannel: () -> Unit,
     val onOpenChangelog: () -> Unit,
     val onOpenIssues: () -> Unit,
     val onOpenUpstream: () -> Unit,
@@ -109,6 +110,7 @@ fun AboutPage(
     onCheckForUpdates: () -> Unit,
     onPreviewUpdateDialog: (() -> Unit)? = null,
     onOpenGitHub: () -> Unit,
+    onOpenChannel: () -> Unit,
     onOpenChangelog: () -> Unit,
     onOpenIssues: () -> Unit,
     onOpenUpstream: () -> Unit,
@@ -196,6 +198,13 @@ fun AboutPage(
                                 title = stringResource(R.string.about_source_code),
                                 endLabel = "GitHub",
                                 onClick = onOpenGitHub,
+                            )
+                            AboutLinkRow(
+                                title = stringResource(R.string.about_channel_title),
+                                summary = stringResource(R.string.about_channel_summary),
+                                icon = MiuixIcons.Messages,
+                                trailingIcon = MiuixIcons.Link,
+                                onClick = onOpenChannel,
                             )
                         }
                     }
@@ -344,6 +353,7 @@ internal fun AboutTabPage(
         onPreviewUpdateDialog = actions.onPreviewUpdateDialog,
         onOpenDeveloper = actions.onOpenDeveloper,
         onOpenGitHub = actions.onOpenGitHub,
+        onOpenChannel = actions.onOpenChannel,
         onOpenChangelog = actions.onOpenChangelog,
         onOpenIssues = actions.onOpenIssues,
         onOpenUpstream = actions.onOpenUpstream,
