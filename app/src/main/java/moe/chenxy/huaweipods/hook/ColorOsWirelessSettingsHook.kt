@@ -48,7 +48,15 @@ object ColorOsWirelessSettingsHook : HookContext() {
         )
     }
 
+    private val rewrite = ColorOsBatterySummaryInjector.Rewrite { text, triple ->
+        ColorOsSettingsBatteryText.rewrite(text, triple.left, triple.right, triple.case, identityConfirmed = true)
+            ?: ColorOsSettingsBatteryText.rewriteSingleValue(text, triple, identityConfirmed = true)
+    }
+
     override fun onHook() {
+        runCatching { hookColorOsBatteryRows(TAG, rewrite) }
+            .onFailure { Log.w(TAG, "Bluetooth settings identity hook unavailable", it) }
+        currentApplicationOrNull()?.let { ColorOsBatterySummaryInjector.attach(it, TAG, rewrite) }
         runCatching { hookVendorId() }
             .onSuccess { Log.i(TAG, "Bluetooth settings vendor hook installed") }
             .onFailure { Log.w(TAG, "Bluetooth settings vendor hook unavailable", it) }
@@ -75,10 +83,7 @@ object ColorOsWirelessSettingsHook : HookContext() {
         val onCreate = Application::class.java.getDeclaredMethod("onCreate")
         hookAfter(onCreate) {
             val app = instance as? Application ?: return@hookAfter
-            val rewrite = ColorOsBatterySummaryInjector.Rewrite { text, triple ->
-                ColorOsSettingsBatteryText.rewrite(text, triple.left, triple.right, triple.case)
-            }
-            ColorOsBatterySummaryInjector.install(app, TAG, rewrite)
+            ColorOsBatterySummaryInjector.attach(app, TAG, rewrite)
         }
     }
 
@@ -88,9 +93,6 @@ object ColorOsWirelessSettingsHook : HookContext() {
      * 冷启动页面也能立刻显示三段。
      */
     private fun hookBatterySummaryResume() {
-        val rewrite = ColorOsBatterySummaryInjector.Rewrite { text, triple ->
-            ColorOsSettingsBatteryText.rewrite(text, triple.left, triple.right, triple.case)
-        }
         val onResume = Activity::class.java.getDeclaredMethod("onResume")
         hookAfter(onResume) {
             val activity = instance as? Activity ?: return@hookAfter
@@ -102,13 +104,10 @@ object ColorOsWirelessSettingsHook : HookContext() {
      * 在它写文本那一刻改写，顺序就固定了：宿主先算，我们改，TextView 收到的是三段。
      */
     private fun hookBatterySummarySetText() {
-        val rewrite = ColorOsBatterySummaryInjector.Rewrite { text, triple ->
-            ColorOsSettingsBatteryText.rewrite(text, triple.left, triple.right, triple.case)
-        }
         val setText = TextView::class.java.getDeclaredMethod("setText", CharSequence::class.java)
         hookBefore(setText) {
-            val text = args[0] as? CharSequence ?: return@hookBefore
-            ColorOsBatterySummaryInjector.rewriteForAnyPod(text, rewrite, (instance as? TextView)?.context)
+            val view = instance as? TextView ?: return@hookBefore
+            ColorOsBatterySummaryInjector.replacement(view, args[0] as? CharSequence, rewrite)
                 ?.let { proceedWithArgs(it) }
         }
     }
@@ -148,6 +147,12 @@ object ColorOsWirelessSettingsHook : HookContext() {
             }
             Log.i(TAG, "Bluetooth settings earphone entry redirected to HuaweiPods")
             proceedWithArgs(popupIntent, -1, args.getOrNull(2))
+        }
+    }
+
+    override fun onClose() {
+        if (!runOnMainThreadBlocking { ColorOsBatterySummaryInjector.close() }) {
+            Log.w(TAG, "Bluetooth settings summaries could not be restored on main thread")
         }
     }
 

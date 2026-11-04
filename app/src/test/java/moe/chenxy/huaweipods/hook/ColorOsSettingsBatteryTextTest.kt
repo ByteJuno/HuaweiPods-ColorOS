@@ -147,4 +147,23 @@ class ColorOsSettingsBatteryTextTest {
             ColorOsSettingsBatteryText.rewriteSingleValue("已连接。电量：92%。", triple),
         )
     }
+
+    @Test fun `confirmed device identity allows live values to replace an older host summary`() {
+        assertEquals("使用中，电量：左 99%，右 98%，盒 80%",
+            ColorOsSettingsBatteryText.rewrite("使用中，电量：左 100%，右 100%", 99, 98, 80, identityConfirmed = true))
+        assertNull(ColorOsSettingsBatteryText.rewrite("使用中，电量：左 100%，右 100%", 99, 98, 80))
+    }
+
+    @Test fun `confirmed single device does not require its new battery to equal the previous value`() {
+        val triple = ColorOsBatteryTriple(99, 98, 80)
+        assertEquals("已连接。电量： 左 99%，右 98%，盒 80%。",
+            ColorOsSettingsBatteryText.rewriteSingleValue("已连接。电量：100%。", triple, identityConfirmed = true))
+        assertNull(ColorOsSettingsBatteryText.rewriteSingleValue("已连接。电量：100%。", triple))
+    }
+
+    @Test fun `identity confirmation does not turn unrelated settings text into a battery summary`() {
+        val triple = ColorOsBatteryTriple(99, 98, 80)
+        assertNull(ColorOsSettingsBatteryText.rewriteSingleValue("电池电量：100%。", triple, identityConfirmed = true))
+        assertNull(ColorOsSettingsBatteryText.rewrite("手机名称：一加 15", 99, 98, 80, identityConfirmed = true))
+    }
 }

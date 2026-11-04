@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="freeclip_control_writing">Writing, awaiting device readback…</string>
+    <string name="freeclip_control_remote_writing">Another page is writing, awaiting device readback…</string>
+    <string name="freeclip_control_unconfirmed">Unconfirmed</string>
+    <string name="freeclip_control_confirmed">Settings confirmed by the earbuds</string>
+</resources>

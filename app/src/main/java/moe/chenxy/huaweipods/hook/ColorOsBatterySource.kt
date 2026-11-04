@@ -9,8 +9,8 @@ import moe.chenxy.huaweipods.utils.miuiStrongToast.data.HuaweiPodsAction
 import moe.chenxy.huaweipods.utils.miuiStrongToast.data.addHuaweiPodsAction
 
 /** 每代 Hook 只恢复一次快照；读数据不会让已经断开的耳机复活。 */
-internal class ColorOsSystemUiBatterySource(
-    private val loadSnapshot: () -> ColorOsPodBattery?,
+internal class ColorOsBatterySource(
+    private val loadSnapshot: () -> List<ColorOsPodBattery>,
     private val subscribe: ((ColorOsPodBattery) -> Unit, (String?) -> Unit) -> AutoCloseable,
     private val onChanged: () -> Unit,
 ) : AutoCloseable {
@@ -26,14 +26,17 @@ internal class ColorOsSystemUiBatterySource(
         started = true
         try {
             subscription = subscribe(::receive, ::disconnect)
-            val pod = loadSnapshot()
-            if (pod != null && !disconnectedAll &&
-                ColorOsPodBatteryStore.key(pod.address) !in touchedAddresses &&
-                ColorOsPodBatteryStore.get(pod.address) == null
-            ) {
-                ColorOsPodBatteryStore.put(pod)
-                onChanged()
+            var restored = false
+            loadSnapshot().forEach { pod ->
+                if (!disconnectedAll &&
+                    ColorOsPodBatteryStore.key(pod.address) !in touchedAddresses &&
+                    ColorOsPodBatteryStore.get(pod.address) == null
+                ) {
+                    ColorOsPodBatteryStore.put(pod)
+                    restored = true
+                }
             }
+            if (restored) onChanged()
         } catch (failure: Throwable) {
             started = false
             runCatching { subscription?.close() }
@@ -78,9 +81,9 @@ internal class ColorOsSystemUiBatterySource(
     }
 
     companion object {
-        fun forContext(context: Context, onChanged: () -> Unit): ColorOsSystemUiBatterySource =
-            ColorOsSystemUiBatterySource(
-                loadSnapshot = { ColorOsBatterySnapshot.load(context) },
+        fun forContext(context: Context, tag: String, onChanged: () -> Unit): ColorOsBatterySource =
+            ColorOsBatterySource(
+                loadSnapshot = { ColorOsBatterySnapshot.loadAll(context) },
                 subscribe = { receive, disconnect ->
                     val receiver = object : BroadcastReceiver() {
                         override fun onReceive(context: Context, intent: Intent) {
@@ -94,7 +97,7 @@ internal class ColorOsSystemUiBatterySource(
                             if (!trusted) return
                             runCatching {
                                 // 同一广播还携带模块 Parcelable，不能交给宿主 ClassLoader 解码。
-                                intent.setExtrasClassLoader(ColorOsSystemUiBatterySource::class.java.classLoader)
+                                intent.setExtrasClassLoader(ColorOsBatterySource::class.java.classLoader)
                                 val address = intent.getStringExtra("address")
                                 when (HuaweiPodsAction.canonical(intent.action)) {
                                     HuaweiPodsAction.ACTION_PODS_DISCONNECTED -> disconnect(address)
@@ -114,7 +117,7 @@ internal class ColorOsSystemUiBatterySource(
                                         )
                                     }
                                 }
-                            }.onFailure { Log.w("HuaweiPods-SystemUi", "battery broadcast unavailable", it) }
+                            }.onFailure { Log.w(tag, "battery broadcast unavailable", it) }
                         }
                     }
                     context.registerReceiver(

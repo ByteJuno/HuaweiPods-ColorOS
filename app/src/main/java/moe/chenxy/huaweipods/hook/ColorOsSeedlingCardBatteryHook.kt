@@ -61,13 +61,15 @@ internal object ColorOsSeedlingCardBatteryHook : HookContext() {
             constructor.isAccessible = true
             hookConstructorBefore(constructor) {
                 runCatching {
-                    val pod = ColorOsBatterySummaryInjector.currentPod() ?: return@runCatching
-                    val triple = colorOsBatteryTriple(pod) ?: return@runCatching
-                    // 先判身份：这个模型是所有设备共用的，不判就会把别人的卡片也改掉。
-                    if (!seedlingCardMentionsPod(args.filterIsInstance<String>(), pod)) {
+                    val values = args.filterIsInstance<String>()
+                    val pod = colorOsPodForIdentity(
+                        pods = ColorOsPodBatteryStore.snapshot(), identities = values, names = values,
+                    )
+                    if (pod == null) {
                         logSkipped(args)
                         return@runCatching
                     }
+                    val triple = colorOsBatteryTriple(pod) ?: return@runCatching
                     val newArgs = args.toMutableList()
                     var changed = false
                     for (index in newArgs.indices) {

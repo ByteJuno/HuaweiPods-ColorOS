@@ -28,8 +28,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import moe.chenxy.huaweipods.R
 import moe.chenxy.huaweipods.pods.HuaweiDeviceRoute
-import moe.chenxy.huaweipods.pods.HuaweiEqualizerController
-import moe.chenxy.huaweipods.pods.HuaweiEqualizerState
+import moe.chenxy.huaweipods.pods.FreeClipControlKey
 import moe.chenxy.huaweipods.pods.HuaweiFreeClipController
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Checkbox
@@ -49,37 +48,26 @@ private val freeClipPresets = listOf(
 @Composable
 fun FreeClipControls(address: String) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var equalizerState by remember(address) { mutableStateOf<HuaweiEqualizerState?>(null) }
+    val controls = rememberFreeClipControls(address)
+    val state = controls.state
     var wearDetection by remember(address) { mutableStateOf<Boolean?>(null) }
-    var adaptiveChannels by remember(address) { mutableStateOf<Boolean?>(null) }
-    var dropReminder by remember(address) { mutableStateOf<Boolean?>(null) }
 
     DisposableEffect(address, context) {
         val device = context.freeClipBluetoothDevice(address)
             ?: return@DisposableEffect onDispose { }
         var disposed = false
-        HuaweiEqualizerController.requestState(
-            context = context,
-            device = device,
-            route = HuaweiDeviceRoute.HUAWEI_FREECLIP,
-        ) { state ->
-            if (!disposed && state != null) equalizerState = state
-        }
-        HuaweiFreeClipController.requestWearDetectionState(context, device) { state ->
-            if (!disposed && state != null) wearDetection = state
-        }
-        HuaweiFreeClipController.requestAdaptiveChannelsState(context, device) { state ->
-            if (!disposed && state != null) adaptiveChannels = state
-        }
-        HuaweiFreeClipController.requestDropReminderState(context, device) { state ->
-            if (!disposed && state != null) dropReminder = state
+        HuaweiFreeClipController.requestWearDetectionState(context, device) { value ->
+            if (!disposed && value != null) wearDetection = value
         }
         onDispose { disposed = true }
     }
 
-    val selectedPreset = freeClipPresets.firstOrNull { it.id == equalizerState?.selectedId }
+    val selectedPreset = freeClipPresets.firstOrNull {
+        it.id.toString() == state.values[FreeClipControlKey.EQUALIZER]
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
+        FreeClipControlStatus(controls)
         FreeClipSectionTitle(R.string.freebuds5_smart_features)
         FreeClipFeatureToggle(
             titleRes = R.string.freebuds5_wear_detection,
@@ -99,63 +87,31 @@ fun FreeClipControls(address: String) {
         FreeClipFeatureToggle(
             titleRes = R.string.freeclip_adaptive_channels,
             summaryRes = R.string.freeclip_adaptive_channels_summary,
-            value = adaptiveChannels,
+            value = state.values[FreeClipControlKey.ADAPTIVE_CHANNELS]?.toBooleanStrictOrNull(),
+            enabled = state.canWrite,
             onChange = { enabled, complete ->
-                val device = context.freeClipBluetoothDevice(address)
-                if (device == null) {
-                    complete(false)
-                } else {
-                    HuaweiFreeClipController.setAdaptiveChannels(context, device, enabled) { success ->
-                        if (success) adaptiveChannels = enabled
-                        complete(success)
-                    }
-                }
+                controls.write(FreeClipControlKey.ADAPTIVE_CHANNELS, enabled.toString(), complete)
             },
         )
         FreeClipFeatureToggle(
             titleRes = R.string.freeclip2_drop_reminder,
             summaryRes = R.string.freeclip_drop_reminder_summary,
-            value = dropReminder,
+            value = state.values[FreeClipControlKey.DROP_REMINDER]?.toBooleanStrictOrNull(),
+            enabled = state.canWrite,
             onChange = { enabled, complete ->
-                val device = context.freeClipBluetoothDevice(address)
-                if (device == null) {
-                    complete(false)
-                } else {
-                    HuaweiFreeClipController.setDropReminder(context, device, enabled) { success ->
-                        if (success) dropReminder = enabled
-                        complete(success)
-                    }
-                }
+                controls.write(FreeClipControlKey.DROP_REMINDER, enabled.toString(), complete)
             },
         )
 
         FreeClipSectionTitle(R.string.freebuds5_sound_and_connection)
-        FreeBuds7iChoicePreference(
+        FreeClipChoicePreference(
+            controls = controls,
             title = stringResource(R.string.freebuds5_sound_effect),
             selected = selectedPreset,
             values = freeClipPresets,
             label = { stringResource(it.labelRes) },
             onSelected = { preset, complete ->
-                val device = context.freeClipBluetoothDevice(address)
-                if (device == null) {
-                    complete(false)
-                } else {
-                    HuaweiEqualizerController.setBuiltInPreset(
-                        context = context,
-                        device = device,
-                        route = HuaweiDeviceRoute.HUAWEI_FREECLIP,
-                        presetId = preset.id,
-                    ) { success ->
-                        if (success) {
-                            equalizerState = equalizerState?.copy(
-                                selectedId = preset.id,
-                                selectedName = null,
-                                selectedGains = null,
-                            )
-                        }
-                        complete(success)
-                    }
-                }
+                controls.write(FreeClipControlKey.EQUALIZER, preset.id.toString(), complete)
             },
         )
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -182,14 +138,16 @@ private fun FreeClipFeatureToggle(
     titleRes: Int,
     value: Boolean?,
     summaryRes: Int? = null,
+    enabled: Boolean = true,
     onChange: (Boolean, (Boolean) -> Unit) -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var pending by remember { mutableStateOf(false) }
+    val canToggle = enabled && !pending && value != null
     val toggle = {
-        if (!pending) {
+        if (canToggle) {
             pending = true
-            val target = value != true
+            val target = value == false
             onChange(target) { success ->
                 pending = false
                 if (!success) {
@@ -202,7 +160,7 @@ private fun FreeClipFeatureToggle(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = !pending, role = Role.Switch, onClick = toggle)
+            .clickable(enabled = canToggle, role = Role.Switch, onClick = toggle)
             .padding(horizontal = 24.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -212,6 +170,13 @@ private fun FreeClipFeatureToggle(
                 color = MiuixTheme.colorScheme.onSurface,
                 style = MiuixTheme.textStyles.headline1,
             )
+            if (value == null) {
+                Text(
+                    text = stringResource(R.string.freeclip_control_unconfirmed),
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    style = MiuixTheme.textStyles.body2,
+                )
+            }
             if (summaryRes != null) {
                 Text(
                     text = stringResource(summaryRes),
@@ -227,7 +192,7 @@ private fun FreeClipFeatureToggle(
                 false -> ToggleableState.Off
                 null -> ToggleableState.Indeterminate
             },
-            enabled = !pending,
+            enabled = canToggle,
             onClick = toggle,
         )
     }

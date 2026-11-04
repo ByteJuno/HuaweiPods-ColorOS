@@ -95,6 +95,7 @@ object HuaweiHfpController {
     private var deviceInfoQueryUnavailableLogged = false
     private var currentDeviceInfoIdentity: HuaweiDeviceInfoIdentity? = null
     private var sessionGeneration = 0L
+    private var freeClipSessionEpoch = 0L
     private var lowLatencyAutoApplyRequest: LowLatencyAutoApplyRequest? = null
     private var lowLatencyAppliedGeneration: Long? = null
     private val lowLatencyWritePolicy = LowLatencyWritePolicy()
@@ -176,6 +177,7 @@ object HuaweiHfpController {
     fun closeForHotReload() {
         backgroundBatteryRefreshActive = false
         mainHandler.removeCallbacksAndMessages(null)
+        FreeClipControlHost.reset()
         cancelPendingSmartAudioSpatialWrite()
         cancelPendingSmartAudioAudioQuery()
         cancelAutoLowLatency()
@@ -378,6 +380,19 @@ object HuaweiHfpController {
                     if (!targetsCurrentSession(receivedIntent, requireAddress = true)) return
                     setLowLatency(receivedIntent)
                 }
+                HuaweiPodsAction.ACTION_FREECLIP_CONTROL_REQUEST -> {
+                    receivedIntent.setExtrasClassLoader(FreeClipControlHost::class.java.classLoader)
+                    if (!targetsCurrentSession(receivedIntent, requireAddress = true)) return
+                    val currentContext = context ?: return
+                    val currentDevice = device ?: return
+                    val route = sessionRoute
+                    val generation = sessionGeneration
+                    val address = currentDevice.address
+                    FreeClipControlHost.handle(
+                        currentContext, currentDevice, route, receivedIntent, mainHandler,
+                        generation, freeClipSessionEpoch,
+                    ) { isCurrentSession(generation, address, route) }
+                }
                 HuaweiPodsAction.ACTION_SHARED_CONTROL_REQUEST -> {
                     if (sentFromPackage != BuildConfig.APPLICATION_ID ||
                         !targetsCurrentSession(receivedIntent, requireAddress = true)) return
@@ -488,6 +503,7 @@ object HuaweiHfpController {
     fun disconnectedPod(context: Context, device: BluetoothDevice) {
         synchronized(sessionStateLock) {
             if (this.device?.address != device.address) return
+            FreeClipControlHost.reset()
             if (sessionRoute == HuaweiDeviceRoute.HUAWEI_FREEBUDS3) {
                 freeBuds3SnapshotStore.markDisconnected(
                     context = context,
@@ -1391,6 +1407,9 @@ object HuaweiHfpController {
             HuaweiL2capAncController.disconnect(previousDevice)
         }
         if (newSession) {
+            FreeClipControlHost.reset()
+            // elapsedRealtime can tie during rapid reconnect; keep the wire epoch strictly ordered.
+            freeClipSessionEpoch = maxOf(SystemClock.elapsedRealtime(), freeClipSessionEpoch + 1L)
             freeBuds3SnapshotStore.clearIfIdentityChanged(context, device.address, route)
             currentBattery = null
             currentBatteryIsCached = false
@@ -2375,6 +2394,7 @@ object HuaweiHfpController {
             addHuaweiPodsAction(HuaweiPodsAction.ACTION_FREECLIP2_AUDIO_REFRESH)
             addHuaweiPodsAction(HuaweiPodsAction.ACTION_HUAWEI_EQUALIZER_PRESET_SET)
             addHuaweiPodsAction(HuaweiPodsAction.ACTION_HUAWEI_EQUALIZER_REFRESH)
+            addHuaweiPodsAction(HuaweiPodsAction.ACTION_FREECLIP_CONTROL_REQUEST)
             addHuaweiPodsAction(HuaweiPodsAction.ACTION_SHARED_CONTROL_REQUEST)
             addHuaweiPodsAction(HuaweiPodsAction.ACTION_SMART_AUDIO_FREECLIP2_RESULT)
             addHuaweiPodsAction(HuaweiPodsAction.ACTION_SMART_AUDIO_FREECLIP2_QUERY_RESULT)

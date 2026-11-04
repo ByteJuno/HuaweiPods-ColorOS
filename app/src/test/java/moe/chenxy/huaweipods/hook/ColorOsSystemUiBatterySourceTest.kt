@@ -5,7 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-class ColorOsSystemUiBatterySourceTest {
+class ColorOsBatterySourceTest {
     private val pod = ColorOsPodBattery("30:A9:98:CB:C4:54", 100, true, 99, true, 88, true)
     private var receive: (ColorOsPodBattery) -> Unit = {}
     private var disconnect: (String?) -> Unit = {}
@@ -14,8 +14,8 @@ class ColorOsSystemUiBatterySourceTest {
     private var loads = 0
     private var changes = 0
 
-    private fun source(load: () -> ColorOsPodBattery? = { pod }) = ColorOsSystemUiBatterySource(
-        loadSnapshot = { loads++; load() },
+    private fun source(load: () -> ColorOsPodBattery? = { pod }) = ColorOsBatterySource(
+        loadSnapshot = { loads++; listOfNotNull(load()) },
         subscribe = { battery, disconnected ->
             registrations++
             receive = battery
@@ -151,4 +151,56 @@ class ColorOsSystemUiBatterySourceTest {
         assertEquals(2, registrations)
         next.close()
     }
+
+    @Test fun `cold restore loads both devices and a live event only replaces its own entry`() {
+        val second = pod.copy(address = "AA:BB:CC:DD:EE:02", case = 20)
+        val source = multiSource { listOf(pod, second) }
+        source.start()
+        assertEquals(pod, source.get(pod.address))
+        assertEquals(second, source.get(second.address))
+        receive(pod.copy(case = 70))
+        assertEquals(70, source.get(pod.address)?.case)
+        assertEquals(second, source.get(second.address))
+        disconnect(second.address)
+        assertNull(source.get(second.address))
+        assertEquals(70, source.get(pod.address)?.case)
+        source.close()
+    }
+
+    @Test fun `disconnect during multi restore excludes only the disconnected record`() {
+        val second = pod.copy(address = "AA:BB:CC:DD:EE:02", case = 20)
+        val source = multiSource {
+            disconnect(pod.address)
+            listOf(pod, second)
+        }
+        source.start()
+        assertNull(source.get(pod.address))
+        assertEquals(second, source.get(second.address))
+        source.close()
+    }
+
+    @Test fun `disconnect all while restoring cannot resurrect any cached device`() {
+        val second = pod.copy(address = "AA:BB:CC:DD:EE:02")
+        val source = multiSource {
+            disconnect(null)
+            listOf(pod, second)
+        }
+        source.start()
+        assertNull(source.get(pod.address))
+        assertNull(source.get(second.address))
+        receive(second.copy(case = 60))
+        assertEquals(60, source.get(second.address)?.case)
+        assertNull(source.get(pod.address))
+        source.close()
+    }
+
+    private fun multiSource(load: () -> List<ColorOsPodBattery>) = ColorOsBatterySource(
+        loadSnapshot = load,
+        subscribe = { battery, disconnected ->
+            receive = battery
+            disconnect = disconnected
+            AutoCloseable { releases++ }
+        },
+        onChanged = { changes++ },
+    )
 }

@@ -308,6 +308,9 @@ object HuaweiL2capAncController {
         responseComplete: ((ByteArray) -> Boolean)? = null,
         onComplete: ((Boolean) -> Unit)? = null,
         keepSocket: Boolean = false,
+        shouldWrite: () -> Boolean = { true },
+        discardBufferedInput: Boolean = false,
+        writeBeforeQuery: ByteArray? = null,
         onResponse: (ByteArray) -> Unit,
     ) {
         enqueueWrite(
@@ -321,6 +324,9 @@ object HuaweiL2capAncController {
             responseComplete = responseComplete,
             onComplete = onComplete,
             onResponse = onResponse,
+            shouldWrite = shouldWrite,
+            discardBufferedInput = discardBufferedInput,
+            writeBeforeQuery = writeBeforeQuery,
         )
     }
 
@@ -363,6 +369,8 @@ object HuaweiL2capAncController {
         responseComplete: ((ByteArray) -> Boolean)? = null,
         onResponse: ((ByteArray) -> Unit)? = null,
         shouldWrite: () -> Boolean = { true },
+        discardBufferedInput: Boolean = false,
+        writeBeforeQuery: ByteArray? = null,
     ) {
         val requestGeneration = transportGeneration.snapshot()
         val appContext = context.applicationContext ?: context
@@ -399,9 +407,27 @@ object HuaweiL2capAncController {
                         val currentSocket = ensureSocket(device, requestGeneration)
                         ensureCurrentTransportGeneration(requestGeneration)
                         // 建链可能较慢；发送前再次拒绝被新用户操作取代的命令。
-                        if (!shouldWrite()) {
-                            notifyComplete(onComplete, false)
-                            return@worker
+                        if (!shouldWrite()) throw CancellationException("Expired Huawei request after connect")
+                        writeBeforeQuery?.let { writePacket ->
+                            currentSocket.outputStream.write(writePacket)
+                            currentSocket.outputStream.flush()
+                            RfcommLog.d(appContext, "RFCOMM/TX", "$description write ${writePacket.toHexString()}")
+                            Thread.sleep(450L)
+                            ensureCurrentTransportGeneration(requestGeneration)
+                            if (!shouldWrite()) throw CancellationException("Expired Huawei write before readback")
+                        }
+                        if (discardBufferedInput) {
+                            // 查询前丢弃复用连接里积压的旧帧，不能把它们当成本次回读。
+                            val input = currentSocket.inputStream
+                            val buffer = ByteArray(1_024)
+                            var discarded = 0
+                            while (input.available() > 0 && discarded < 65_536) {
+                                val count = input.read(buffer, 0, minOf(buffer.size, input.available()))
+                                if (count <= 0) break
+                                discarded += count
+                            }
+                            check(input.available() == 0) { "Huawei response backlog exceeds 64 KiB" }
+                            if (!shouldWrite()) throw CancellationException("Expired Huawei request before query")
                         }
                         currentSocket.outputStream.write(packet)
                         currentSocket.outputStream.flush()

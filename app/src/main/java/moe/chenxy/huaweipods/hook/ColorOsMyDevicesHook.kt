@@ -335,6 +335,9 @@ object ColorOsMyDevicesHook : HookContext() {
         customizeRowText(row, entry.deviceName, summary, entry.allowLabelFallback)
         runCatching { attachQuickControls(row, entry) }
             .onFailure { Log.w(TAG, "Unable to attach quick controls", it) }
+        runCatching {
+            ColorOsFreeClipControls.attach(row, entry.address, entry.route, entry.allowLabelFallback)
+        }.onFailure { Log.w(TAG, "Unable to attach FreeClip detail controls", it) }
     }
 
     /**
@@ -650,6 +653,7 @@ object ColorOsMyDevicesHook : HookContext() {
     }
 
     private fun removeQuickControls(itemView: View) {
+        ColorOsFreeClipControls.remove(itemView)
         val controls = itemView.findViewWithTag<View>(QUICK_CONTROLS_TAG) ?: return
         (controls.parent as? ViewGroup)?.removeView(controls)
     }

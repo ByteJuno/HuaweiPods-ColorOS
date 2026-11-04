@@ -41,13 +41,13 @@ internal object ColorOsHomeCardBattery {
      * 卡片和电量快照是否配对（按名字，保底用）。
      *
      * 卡片上只有设备名（`FreeClip`），广播里带的是完整名（`HUAWEI FreeClip`），
-     * 所以做规范化后双向包含匹配；任何一边为空都不匹配，宁可少画也不要画错卡。
+     * 所以忽略品牌前缀和分隔符后完整匹配型号；任何一边为空都不匹配。
      */
     fun matches(cardName: String?, podName: String?): Boolean {
         val card = normalize(cardName)
         val pod = normalize(podName)
         if (card.isEmpty() || pod.isEmpty()) return false
-        return card.contains(pod) || pod.contains(card)
+        return card == pod
     }
 
     /**
@@ -78,4 +78,5 @@ internal object ColorOsHomeCardBattery {
         raw.orEmpty()
             .lowercase(Locale.ROOT)
             .filter { it.isLetterOrDigit() }
+            .removePrefix("huawei")
 }

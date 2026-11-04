@@ -27,7 +27,7 @@ internal object ColorOsSystemUiBatteryHook : HookContext() {
     private val main = Handler(Looper.getMainLooper())
     private val lifecycleLock = Any()
     private val tiles = WeakHashMap<Any, Unit>()
-    @Volatile private var source: ColorOsSystemUiBatterySource? = null
+    @Volatile private var source: ColorOsBatterySource? = null
     @Volatile private var stopped = false
     private val refresh = Runnable { if (!stopped) refreshTiles() }
 
@@ -57,7 +57,7 @@ internal object ColorOsSystemUiBatteryHook : HookContext() {
             synchronized(lifecycleLock) {
                 if (stopped || source != null) return@synchronized
                 runCatching {
-                    val next = ColorOsSystemUiBatterySource.forContext(context.applicationContext) {
+                    val next = ColorOsBatterySource.forContext(context.applicationContext, TAG) {
                         main.removeCallbacks(refresh)
                         if (!stopped) main.post(refresh)
                     }

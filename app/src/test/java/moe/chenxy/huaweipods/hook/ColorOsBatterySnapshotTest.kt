@@ -83,4 +83,48 @@ class ColorOsBatterySnapshotTest {
     fun `failed storage write is not reported as a successful clear`() {
         assertFalse(ColorOsBatterySnapshot.clearIfMatches(pod.address, { ColorOsBatterySnapshot.encode(pod) }) { false })
     }
+
+    @Test fun `legacy snapshot migrates without discarding the first device`() {
+        val second = pod.copy(address = "AA:BB:CC:DD:EE:02", case = 20)
+        var stored: String? = ColorOsBatterySnapshot.encode(pod)
+        assertTrue(ColorOsBatterySnapshot.saveInto(second, { stored }) { stored = it; true })
+        val restored = ColorOsBatterySnapshot.decodeAll(stored)
+        assertEquals(2, restored.size)
+        assertEquals(100, restored.single { it.address == pod.address.uppercase() }.case)
+        assertEquals(20, restored.single { it.address == second.address }.case)
+    }
+
+    @Test fun `updates and disconnects only modify their own address`() {
+        val second = pod.copy(address = "AA:BB:CC:DD:EE:02", case = 20)
+        var stored: String? = ColorOsBatterySnapshot.encodeAll(listOf(pod, second))
+        assertTrue(ColorOsBatterySnapshot.saveInto(pod.copy(case = 99), { stored }) { stored = it; true })
+        assertEquals(2, ColorOsBatterySnapshot.decodeAll(stored).size)
+        assertTrue(ColorOsBatterySnapshot.clearIfMatches(pod.address.lowercase(), { stored }) { stored = it; true })
+        assertEquals(listOf(second), ColorOsBatterySnapshot.decodeAll(stored))
+        assertTrue(ColorOsBatterySnapshot.clearIfMatches(second.address, { stored }) { stored = it; true })
+        assertNull(stored)
+    }
+
+    @Test fun `names cannot inject additional snapshot rows`() {
+        val named = pod.copy(name = "FreeClip\r\nInjected|record")
+        val restored = ColorOsBatterySnapshot.decodeAll(ColorOsBatterySnapshot.encodeAll(listOf(named)))
+        assertEquals(1, restored.size)
+        assertEquals("FreeClip  Injected record", restored.single().name)
+    }
+
+    @Test fun `malformed rows do not hide other valid device records`() {
+        val normalized = pod.copy(address = pod.address.uppercase())
+        val legacy = ColorOsBatterySnapshot.encode(pod)
+        assertEquals(listOf(normalized), ColorOsBatterySnapshot.decodeAll("v2\ninvalid\n$legacy\n"))
+        assertEquals(listOf(normalized), ColorOsBatterySnapshot.decodeAll(legacy))
+        assertEquals(emptyList<ColorOsPodBattery>(), ColorOsBatterySnapshot.decodeAll(null))
+        assertEquals(emptyList<ColorOsPodBattery>(), ColorOsBatterySnapshot.decodeAll("v2\n"))
+    }
+
+    @Test fun `failed writes and empty addresses do not pretend to save`() {
+        var writes = 0
+        assertFalse(ColorOsBatterySnapshot.saveInto(pod.copy(address = ""), { null }) { writes++; true })
+        assertEquals(0, writes)
+        assertFalse(ColorOsBatterySnapshot.saveInto(pod, { null }) { false })
+    }
 }
