@@ -80,11 +80,14 @@ internal fun colorOsBatteryTriple(pod: ColorOsPodBattery?): ColorOsBatteryTriple
 internal object ColorOsPodBatteryStore {
     private val entries = ConcurrentHashMap<String, ColorOsPodBattery>()
 
-    internal fun key(address: String): String = address.trim().uppercase()
+    internal fun key(address: String): String = address.trim().uppercase(java.util.Locale.ROOT)
 
     fun put(pod: ColorOsPodBattery) {
         if (pod.address.isBlank()) return
-        entries[key(pod.address)] = pod.copy(address = key(pod.address))
+        val address = key(pod.address)
+        entries.compute(address) { _, previous ->
+            pod.copy(address = address, name = pod.name?.takeIf(String::isNotBlank) ?: previous?.name)
+        }
     }
 
     fun get(address: String?): ColorOsPodBattery? {

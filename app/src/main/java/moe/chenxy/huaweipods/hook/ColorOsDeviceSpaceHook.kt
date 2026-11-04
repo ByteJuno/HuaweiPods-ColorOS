@@ -3,10 +3,8 @@ package moe.chenxy.huaweipods.hook
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.bluetooth.BluetoothManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.os.Handler
@@ -32,8 +30,6 @@ import moe.chenxy.huaweipods.config.PodImagePrefs
 import moe.chenxy.huaweipods.pods.HuaweiDeviceRoute
 import moe.chenxy.huaweipods.pods.isSupported
 import moe.chenxy.huaweipods.utils.PodImageLoader
-import moe.chenxy.huaweipods.utils.miuiStrongToast.data.HuaweiPodsAction
-import moe.chenxy.huaweipods.utils.miuiStrongToast.data.addHuaweiPodsActions
 
 /** Verified against My Devices 17.25.10. Unknown host shapes retain their native rendering. */
 object ColorOsDeviceSpaceHook : HookContext() {
@@ -72,20 +68,23 @@ private val LOW_BATTERY_COLOR = 0xFFFF5252.toInt()
     @Volatile private var stopped = false
     @Volatile private var batteryShape: HomeCardBatteryShape? = null
     @Volatile private var applyingBattery = false
-    private var batteryReceiver: BroadcastReceiver? = null
-    private var batteryReceiverContext: Context? = null
+    private val batteryLock = Any()
+    private var batterySource: ColorOsBatterySource? = null
 
     /**
-     * 最近一次构建出来的卡片 DTO。
+     * 仍在使用的卡片 DTO，按各自地址更新。
      *
      * 宿主只在数据变化时重建卡片（切页、连接状态变化），电量广播每十来秒一次，光靠 `h()`
      * 重跑根本等不到：卡片第一次构建时仓库必然是空的。所以这里留下弱引用，电量到了直接
-     * 把新数据补进同一个 DTO，详情页下次读到的就是三段。
+     * 把新数据补进对应 DTO，详情页下次读到的就是三段。
      */
-    @Volatile private var lastCardData: java.lang.ref.WeakReference<Any>? = null
-    @Volatile private var lastCardAddress: String? = null
-    @Volatile private var lastCardShape: HomeCardBatteryShape? = null
-    @Volatile private var lastBatterySignature: String? = null
+    private data class BatteryTarget(
+        val data: WeakReference<Any>,
+        val address: String,
+        val shape: HomeCardBatteryShape,
+        val overrides: ColorOsBatteryFieldOverrides = ColorOsBatteryFieldOverrides(),
+    )
+    private val batteryTargets = mutableListOf<BatteryTarget>()
     @Volatile private var lastGateSignature: String? = null
     @Volatile private var lastModeSignature: String? = null
     @Volatile private var viewDumped = false
@@ -112,6 +111,10 @@ private val LOW_BATTERY_COLOR = 0xFFFF5252.toInt()
         runCatching { hookHomeCardLayout() }
             .onSuccess { Log.i(TAG, "Device Space home card layout probe installed") }
             .onFailure { Log.w(TAG, "Home card layout probe unavailable", it) }
+        currentApplicationOrNull()?.let { context ->
+            runCatching { registerBatteryReceiver(context) }
+                .onFailure { Log.w(TAG, "Device Space battery source unavailable", it) }
+        }
     }
 
     /** 一次性把卡片实例上的字符串字段打出来，用来确认地址藏在哪。 */
@@ -134,10 +137,7 @@ private val LOW_BATTERY_COLOR = 0xFFFF5252.toInt()
     private fun homeCardAddress(card: View): String? {
         val values = homeCardFieldValues(card)
         if (values.isEmpty()) return null
-        return ColorOsPodBatteryStore.snapshot().firstOrNull { pod ->
-            val id = ColorOsHomeCardBattery.deviceIdFor(pod.address) ?: return@firstOrNull false
-            values.any { it.equals(id, ignoreCase = true) }
-        }?.address
+        return colorOsPodForIdentity(ColorOsPodBatteryStore.snapshot(), identities = values)?.address
     }
 
     /** 卡片实例上的全部字符串字段值（`j`、`s` 这些混淆字段里就有设备 id）。 */
@@ -224,55 +224,21 @@ private val LOW_BATTERY_COLOR = 0xFFFF5252.toInt()
      * 卡片渲染在 `:cards`，所以每个进程都要自己收一份，不能只靠「我的设备」页的接收者。
      */
     private fun registerBatteryReceiver(context: Context) {
-        if (batteryReceiver != null) return
-        // 拿到 Context 就把运行时开关接上：三段电量的两个开关读 Settings.Global，改设置几秒内生效。
-        ColorOsBatteryFlags.attach(context)
-        // 冷启动的「我的设备」进程还没有电量广播，先拿蓝牙进程写的快照顶上，
-        // 否则首页卡片浮层要等下一包广播才出现。
-        ColorOsBatterySnapshot.restoreInto(context)
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                val address = intent.getStringExtra("address")?.uppercase()
-                when (intent.action) {
-                    HuaweiPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
-                        val target = address ?: return
-                        val pod = ColorOsPodBattery(
-                            address = target,
-                            left = intent.getIntExtra("left_battery", 0),
-                            leftConnected = intent.getBooleanExtra("left_connected", false),
-                            right = intent.getIntExtra("right_battery", 0),
-                            rightConnected = intent.getBooleanExtra("right_connected", false),
-                            case = intent.getIntExtra("case_battery", 0),
-                            caseConnected = intent.getBooleanExtra("case_connected", false),
-                            name = intent.getStringExtra("device_name")?.takeIf(String::isNotBlank),
-                        )
-                        ColorOsPodBatteryStore.put(pod)
-                        val signature = "$target left=${pod.left}/${pod.leftConnected} " +
-                            "right=${pod.right}/${pod.rightConnected} case=${pod.case}/${pod.caseConnected}"
-                        if (signature != lastBatterySignature) {
-                            lastBatterySignature = signature
-                            Log.i(TAG, "Device Space battery event $signature")
-                        }
-                    }
-                    HuaweiPodsAction.ACTION_PODS_DISCONNECTED -> ColorOsPodBatteryStore.clear(address)
-                    else -> return
-                }
-                // 只刷电量：图片刷新链路会按 host 原生图 restore，电量广播每十几秒一次，
-                // 走图片路径会把已经替换好的耳机图反复还原回宿主默认图。
+        synchronized(batteryLock) {
+            if (stopped || batterySource != null) return
+            ColorOsBatteryFlags.attach(context)
+            val next = ColorOsBatterySource.forContext(context.applicationContext ?: context, TAG) {
+                // 电量变化只刷电量，避免图片链路把已替换的耳机图恢复成默认图。
                 main.post {
-                    refreshVisibleBattery()
-                    reapplyLastCardBattery()
+                    if (!stopped) {
+                        refreshVisibleBattery()
+                        reapplyCardBatteries()
+                    }
                 }
             }
+            next.start()
+            batterySource = next
         }
-        val filter = IntentFilter().addHuaweiPodsActions(
-            HuaweiPodsAction.ACTION_PODS_BATTERY_CHANGED,
-            HuaweiPodsAction.ACTION_PODS_DISCONNECTED,
-        )
-        // 电量广播来自蓝牙进程（共享身份广播），宿主侧必须显式 EXPORTED 才能收到。
-        context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        batteryReceiver = receiver
-        batteryReceiverContext = context
     }
 
     private fun hookHomeImages() {
@@ -371,9 +337,22 @@ private val LOW_BATTERY_COLOR = 0xFFFF5252.toInt()
         // 卡片绑定不一定发生在 Application.onCreate 之后，所以这里再兜一次。
         ColorOsBatteryFlags.attach(currentApplicationOrNull())
         // 卡片 DTO 只在数据变化时重建，所以留一份弱引用供电量广播补写。
-        lastCardData = java.lang.ref.WeakReference(data)
-        lastCardAddress = address
-        lastCardShape = shape
+        val target = synchronized(batteryTargets) {
+            batteryTargets.removeAll { it.data.get() == null }
+            val previous = batteryTargets.firstOrNull { it.data.get() === data }
+            if (previous != null && previous.address.equals(address, ignoreCase = true)) {
+                previous
+            } else {
+                previous?.let {
+                    restoreCardBattery(it)
+                    batteryTargets.remove(it)
+                }
+                BatteryTarget(WeakReference(data), address, shape).also {
+                    batteryTargets.add(it)
+                    if (batteryTargets.size > 64) restoreCardBattery(batteryTargets.removeAt(0))
+                }
+            }
+        }
         val snapshot = ColorOsPodBatteryStore.get(address)
         val mask = ColorOsBatteryFlags.mask()
         val gate = "mask=$mask storeHit=${snapshot != null} " +
@@ -382,32 +361,50 @@ private val LOW_BATTERY_COLOR = 0xFFFF5252.toInt()
             lastGateSignature = gate
             Log.i(TAG, "Device Space DTO gate $gate address=$address")
         }
-        if (mask and (ColorOsBatteryFlags.BIT_DTO or ColorOsBatteryFlags.BIT_CARD) == 0) return
-        val triple = colorOsBatteryTriple(snapshot) ?: return
-        // 缺的段不写：宿主对没写过的槽位保持自己的处理，塞 0 反而会显示成"0%"。
-        triple.left?.let { setObjectField(data, "batteryLeft", shape.info(ColorOsBatteryTriple.CHANNEL_LEFT, it)) }
-        triple.right?.let { setObjectField(data, "batteryRight", shape.info(ColorOsBatteryTriple.CHANNEL_RIGHT, it)) }
+        val triple = colorOsBatteryTriple(snapshot)
+        if (mask and (ColorOsBatteryFlags.BIT_DTO or ColorOsBatteryFlags.BIT_CARD) == 0 || triple == null) {
+            restoreCardBattery(target)
+            return
+        }
         val third = triple.case
             ?.let { ColorOsBatteryPart(ColorOsBatteryTriple.CHANNEL_BOX, it) }
             ?: triple.mainPart
-        setObjectField(data, "batteryMain", shape.info(third.channel, third.value))
-        setObjectField(data, "batteryMin", shape.info(triple.minPart.channel, triple.minPart.value))
-        // 只有一段时告诉宿主"不支持多段"，免得它自己切多段布局后显示成空块。
-        setObjectField(data, "isSupportMutiBattery", triple.isMulti)
-        setObjectField(data, "isShowBattery", true)
+        val values = buildMap<String, Any?> {
+            // 每次先撤掉上次的覆盖；缺失通道回到宿主字段，不留下旧数字，也不伪造 0%。
+            triple.left?.let { put("batteryLeft", shape.info(ColorOsBatteryTriple.CHANNEL_LEFT, it)) }
+            triple.right?.let { put("batteryRight", shape.info(ColorOsBatteryTriple.CHANNEL_RIGHT, it)) }
+            put("batteryMain", shape.info(third.channel, third.value))
+            put("batteryMin", shape.info(triple.minPart.channel, triple.minPart.value))
+            put("isSupportMutiBattery", triple.isMulti)
+            put("isShowBattery", true)
+        }
+        target.overrides.apply(values, { getObjectField(data, it) }, { field, value ->
+            setObjectField(data, field, value)
+        })
         Log.i(
             TAG,
             "Device Space card battery left=${triple.left} right=${triple.right} case=${triple.case} multi=${triple.isMulti}",
         )
     }
 
-    /** 电量到了以后，把新数据补写进最近一次构建的卡片 DTO（弱引用没了就等下次重建）。 */
-    private fun reapplyLastCardBattery() {
-        val data = lastCardData?.get() ?: return
-        val address = lastCardAddress ?: return
-        val shape = lastCardShape ?: return
-        runCatching { applyCardBattery(data, address, shape) }
-            .onFailure { Log.w(TAG, "Unable to refresh Device Space DTO battery", it) }
+    private fun restoreCardBattery(target: BatteryTarget) {
+        val data = target.data.get() ?: return
+        target.overrides.restore({ getObjectField(data, it) }, { field, value ->
+            setObjectField(data, field, value)
+        })
+    }
+
+    /** 按各自地址刷新所有仍存活的 DTO，不让最后构建的另一张卡片覆盖刷新目标。 */
+    private fun reapplyCardBatteries() {
+        val targets = synchronized(batteryTargets) {
+            batteryTargets.removeAll { it.data.get() == null }
+            batteryTargets.toList()
+        }
+        targets.forEach { target ->
+            val data = target.data.get() ?: return@forEach
+            runCatching { applyCardBattery(data, target.address, target.shape) }
+                .onFailure { Log.w(TAG, "Unable to refresh Device Space DTO battery", it) }
+        }
     }
 
     /** 卡片视图侧：宿主按 `SINGLE` 只画一个数字，这里在它 bind 完以后切成 `MULTI`。 */
@@ -574,8 +571,8 @@ private val LOW_BATTERY_COLOR = 0xFFFF5252.toInt()
     /**
      * 首页卡片三段电量浮层。
      *
-     * 卡片里能拿到的只有设备名（没有地址），所以用"卡片名 ↔ 广播里的 device_name"做规范化包含匹配
-     * （[ColorOsHomeCardBattery.matches]），配不上就什么都不画 —— 宁可不显示，也不能把别的设备电量写上去。
+     * 优先用卡片的 MAC / MD5 设备 id；没有身份字段时才按规范化后的完整设备名匹配。
+     * 身份冲突、同名歧义或配不上时不画浮层。
      *
      * 插在 `BatteryLottieView` 同一个父容器里、紧跟它后面：父容器是 `LinearLayout` 才动手，
      * 别的布局插进去会挤坏宿主排版，所以只在 `LinearLayout` 上做，并且只记一次日志说明跳过了什么。
@@ -585,11 +582,12 @@ private val LOW_BATTERY_COLOR = 0xFFFF5252.toInt()
         val card = homeCardAncestor(anchor) ?: return
         val nameText = homeCardNameText(card)
         val cardAddress = homeCardAddress(card)
-        // 优先按 MAC 配对；卡片上没有地址时退回按名字（同型号两只在线时可能配错，日志里会写清来源）。
-        val pod = ColorOsPodBatteryStore.get(cardAddress)
-            ?: ColorOsPodBatteryStore.snapshot().firstOrNull {
-                ColorOsHomeCardBattery.matches(nameText, it.name)
-            }
+        val pod = colorOsPodForIdentity(
+            pods = ColorOsPodBatteryStore.snapshot(),
+            address = cardAddress,
+            identities = homeCardFieldValues(card),
+            names = listOf(nameText),
+        )
         val triple = colorOsBatteryTriple(pod)
         val text = triple?.let { ColorOsHomeCardBattery.textFor(it.left, it.right, it.case) }
         val parent = anchor.parent as? ViewGroup ?: return
@@ -919,13 +917,23 @@ private val LOW_BATTERY_COLOR = 0xFFFF5252.toInt()
 
     override fun onClose() {
         stopped = true
-        batteryReceiver?.let { receiver -> runCatching { batteryReceiverContext?.unregisterReceiver(receiver) } }
-        batteryReceiver = null
-        batteryReceiverContext = null
+        synchronized(batteryLock) {
+            val previous = batterySource
+            batterySource = null
+            runCatching { previous?.close() }
+                .onFailure { Log.w(TAG, "Unable to release Device Space battery source", it) }
+        }
         batteryShape = null
         // 先还原宿主图片再等线程退出：等待可能超时，而宿主不能继续挂着我们的 Bitmap。
         val restored = runOnMainThreadBlocking {
             main.removeCallbacksAndMessages(null)
+            synchronized(batteryTargets) {
+                batteryTargets.forEach { target ->
+                    runCatching { restoreCardBattery(target) }
+                        .onFailure { Log.w(TAG, "Unable to restore Device Space DTO battery", it) }
+                }
+                batteryTargets.clear()
+            }
             images.keys.toList().forEach(::restore)
             cards.clear()
             scheduled.clear()

@@ -7,6 +7,39 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HuaweiPodsBroadcastTrustPolicyTest {
+    @Test fun freeClipSessionStateIsBluetoothOnlyAndDistinctFromNonceResult() {
+        val state = HuaweiPodsAction.ACTION_FREECLIP_CONTROL_STATE
+        assertFalse(state == HuaweiPodsAction.ACTION_FREECLIP_CONTROL_RESULT)
+        assertFalse(state == HuaweiPodsAction.ACTION_FREECLIP_CONTROL_REQUEST)
+        assertEquals(BroadcastActionDomain.BLUETOOTH_STATE, HuaweiPodsBroadcastTrustPolicy.resolveDomain(state))
+        assertTrue(HuaweiPodsBroadcastTrustPolicy.shouldAcceptBroadcast(state, HuaweiPodsBroadcastTrustPolicy.PACKAGE_BLUETOOTH))
+        assertTrue(HuaweiPodsBroadcastTrustPolicy.shouldAcceptMyDevicesStateBroadcast(state, HuaweiPodsBroadcastTrustPolicy.PACKAGE_BLUETOOTH))
+        listOf(null, "", "com.fake.bluetooth", HuaweiPodsBroadcastTrustPolicy.PACKAGE_APP,
+            HuaweiPodsBroadcastTrustPolicy.PACKAGE_HEYTAP_MYDEVICES, HuaweiPodsBroadcastTrustPolicy.PACKAGE_HEYTAP_ACCESSORY,
+            HuaweiPodsBroadcastTrustPolicy.PACKAGE_SMART_AUDIO).forEach { sender ->
+            assertFalse(HuaweiPodsBroadcastTrustPolicy.shouldAcceptBroadcast(state, sender))
+            assertFalse(HuaweiPodsBroadcastTrustPolicy.shouldAcceptMyDevicesStateBroadcast(state, sender))
+        }
+    }
+
+    @Test fun freeClipDetailControlKeepsRequestAndResultInSeparateTrustDomains() {
+        val request = HuaweiPodsAction.ACTION_FREECLIP_CONTROL_REQUEST
+        val result = HuaweiPodsAction.ACTION_FREECLIP_CONTROL_RESULT
+        assertEquals(BroadcastActionDomain.APP_CONTROL, HuaweiPodsBroadcastTrustPolicy.resolveDomain(request))
+        assertEquals(BroadcastActionDomain.BLUETOOTH_STATE, HuaweiPodsBroadcastTrustPolicy.resolveDomain(result))
+        assertTrue(HuaweiPodsBroadcastTrustPolicy.shouldAcceptBroadcast(request, HuaweiPodsBroadcastTrustPolicy.PACKAGE_HEYTAP_MYDEVICES))
+        assertFalse(HuaweiPodsBroadcastTrustPolicy.shouldAcceptBroadcast(request, null))
+        assertFalse(HuaweiPodsBroadcastTrustPolicy.shouldAcceptBroadcast(request, "com.fake.bluetooth"))
+        assertFalse(HuaweiPodsBroadcastTrustPolicy.shouldAcceptMyDevicesStateBroadcast(request, HuaweiPodsBroadcastTrustPolicy.PACKAGE_BLUETOOTH))
+        assertTrue(HuaweiPodsBroadcastTrustPolicy.shouldAcceptMyDevicesStateBroadcast(result, HuaweiPodsBroadcastTrustPolicy.PACKAGE_BLUETOOTH))
+        listOf(null, "", "com.fake.bluetooth", HuaweiPodsBroadcastTrustPolicy.PACKAGE_APP,
+            HuaweiPodsBroadcastTrustPolicy.PACKAGE_HEYTAP_MYDEVICES, HuaweiPodsBroadcastTrustPolicy.PACKAGE_HEYTAP_ACCESSORY,
+            HuaweiPodsBroadcastTrustPolicy.PACKAGE_SMART_AUDIO).forEach { sender ->
+            assertFalse(HuaweiPodsBroadcastTrustPolicy.shouldAcceptBroadcast(result, sender))
+            assertFalse(HuaweiPodsBroadcastTrustPolicy.shouldAcceptMyDevicesStateBroadcast(result, sender))
+        }
+    }
+
     @Test fun sharedControlKeepsRequestAndResultInSeparateTrustDomains() {
         assertEquals(BroadcastActionDomain.APP_CONTROL,
             HuaweiPodsBroadcastTrustPolicy.resolveDomain(HuaweiPodsAction.ACTION_SHARED_CONTROL_REQUEST))
@@ -173,6 +206,7 @@ class HuaweiPodsBroadcastTrustPolicyTest {
     @Test
     fun `My Devices accepts only confirmed Bluetooth status actions`() {
         val actions = listOf(
+            HuaweiPodsAction.ACTION_PODS_CONNECTED,
             HuaweiPodsAction.ACTION_PODS_BATTERY_CHANGED,
             HuaweiPodsAction.ACTION_PODS_ANC_CHANGED,
             HuaweiPodsAction.ACTION_HUAWEI_LOW_LATENCY_CHANGED,
@@ -196,6 +230,7 @@ class HuaweiPodsBroadcastTrustPolicyTest {
     @Test
     fun `My Devices rejects state with missing identity or non Bluetooth sender`() {
         val actions = listOf(
+            HuaweiPodsAction.ACTION_PODS_CONNECTED,
             HuaweiPodsAction.ACTION_PODS_BATTERY_CHANGED,
             HuaweiPodsAction.ACTION_PODS_ANC_CHANGED,
             HuaweiPodsAction.ACTION_HUAWEI_LOW_LATENCY_CHANGED,
@@ -230,7 +265,6 @@ class HuaweiPodsBroadcastTrustPolicyTest {
             HuaweiPodsAction.ACTION_REFRESH_STATUS,
             HuaweiPodsAction.ACTION_HUAWEI_LOW_LATENCY_SET,
             HuaweiPodsAction.ACTION_CONFIG_CHANGED,
-            HuaweiPodsAction.ACTION_PODS_CONNECTED,
             HuaweiPodsAction.ACTION_PODS_CONNECTION_STATE_CHANGED,
             HuaweiPodsAction.ACTION_MODULE_BLUETOOTH_SERVICE_ALIVE,
         )

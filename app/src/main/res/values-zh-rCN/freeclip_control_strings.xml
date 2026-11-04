@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="freeclip_control_writing">写入中，等待耳机回读确认…</string>
+    <string name="freeclip_control_remote_writing">其他页面正在写入，等待耳机回读…</string>
+    <string name="freeclip_control_unconfirmed">未确认</string>
+    <string name="freeclip_control_confirmed">当前设置已由耳机回读确认</string>
+</resources>

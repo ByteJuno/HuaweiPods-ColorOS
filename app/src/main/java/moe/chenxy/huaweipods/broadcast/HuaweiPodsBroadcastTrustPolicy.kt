@@ -48,11 +48,14 @@ object HuaweiPodsBroadcastTrustPolicy {
     )
 
     private val myDevicesStateActions = setOf(
+        HuaweiPodsAction.ACTION_PODS_CONNECTED,
         HuaweiPodsAction.ACTION_PODS_BATTERY_CHANGED,
         HuaweiPodsAction.ACTION_PODS_ANC_CHANGED,
         HuaweiPodsAction.ACTION_PODS_DISCONNECTED,
         HuaweiPodsAction.ACTION_HUAWEI_LOW_LATENCY_CHANGED,
         HuaweiPodsAction.ACTION_HUAWEI_WEAR_DETECTION_CHANGED,
+        HuaweiPodsAction.ACTION_FREECLIP_CONTROL_RESULT,
+        HuaweiPodsAction.ACTION_FREECLIP_CONTROL_STATE,
     )
 
     /** 判断是否为合法的控制类广播发送者 */
@@ -67,7 +70,7 @@ object HuaweiPodsBroadcastTrustPolicy {
     internal fun shouldAcceptBoundHeadsetEvent(action: String?, uidPackages: Array<String>?): Boolean =
         isHeadsetLifecycleAction(action) && uidPackages?.any(::isTrustedBluetoothStateSender) == true
 
-    /** 我的设备只消费蓝牙进程确认的四类状态，不接受控制动作或其他宿主伪造的状态。 */
+    /** 我的设备只消费声明过的蓝牙状态，不接受控制动作或其他宿主伪造的状态。 */
     fun shouldAcceptMyDevicesStateBroadcast(action: String?, senderPackage: String?): Boolean =
         HuaweiPodsAction.canonical(action) in myDevicesStateActions &&
             isTrustedBluetoothStateSender(senderPackage)
@@ -105,6 +108,7 @@ object HuaweiPodsBroadcastTrustPolicy {
             HuaweiPodsAction.ACTION_FREECLIP2_AUDIO_REFRESH,
             HuaweiPodsAction.ACTION_HUAWEI_EQUALIZER_PRESET_SET,
             HuaweiPodsAction.ACTION_HUAWEI_EQUALIZER_REFRESH,
+            HuaweiPodsAction.ACTION_FREECLIP_CONTROL_REQUEST,
             HuaweiPodsAction.ACTION_SHARED_CONTROL_REQUEST,
             HuaweiPodsAction.ACTION_HUAWEI_LEGACY_DEBUG_SEND,
             HuaweiPodsAction.ACTION_COLOROS_POPUP_HOST_PROBE,
@@ -129,6 +133,8 @@ object HuaweiPodsBroadcastTrustPolicy {
             HuaweiPodsAction.ACTION_HUAWEI_GESTURE_CHANGED,
             HuaweiPodsAction.ACTION_FREECLIP2_AUDIO_CHANGED,
             HuaweiPodsAction.ACTION_HUAWEI_EQUALIZER_CHANGED,
+            HuaweiPodsAction.ACTION_FREECLIP_CONTROL_RESULT,
+            HuaweiPodsAction.ACTION_FREECLIP_CONTROL_STATE,
             HuaweiPodsAction.ACTION_SHARED_CONTROL_RESULT,
             HuaweiPodsAction.ACTION_DEVICE_ROUTE_PROBE_RESULT,
             HuaweiPodsAction.ACTION_MODULE_BLUETOOTH_SERVICE_ALIVE,

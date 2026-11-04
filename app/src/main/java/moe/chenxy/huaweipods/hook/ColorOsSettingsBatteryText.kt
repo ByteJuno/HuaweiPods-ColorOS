@@ -37,14 +37,14 @@ internal object ColorOsSettingsBatteryText {
      *
      * [left] / [right] / [case] 为 `null` 表示该段不可用。
      */
-    fun rewrite(text: CharSequence?, left: Int?, right: Int?, case: Int?): String? {
+    fun rewrite(text: CharSequence?, left: Int?, right: Int?, case: Int?, identityConfirmed: Boolean = false): String? {
         val raw = text?.toString()?.trim().orEmpty()
         if (raw.isEmpty()) return null
         val separator = raw.indexOfAny(charArrayOf('：', ':'))
         if (separator < 0 || separator == raw.lastIndex) return null
         val body = raw.substring(separator + 1)
         if (PART_MARKERS.none { body.contains(it) }) return null
-        if (!hostPartsMatch(body, left, right)) return null
+        if (!identityConfirmed && !hostPartsMatch(body, left, right)) return null
         // 英文模板里冒号后面通常还有个空格（`battery: 左 98%`），改写时原样保留。
         val leading = body.takeWhile { it == ' ' }
         val parts = buildList {
@@ -74,7 +74,7 @@ internal object ColorOsSettingsBatteryText {
      *
      * 尾部的句号原样保留；认不出（不是单值、或可用段不足两段）返回 `null`。
      */
-    fun rewriteSingleValue(text: CharSequence?, triple: ColorOsBatteryTriple?): String? {
+    fun rewriteSingleValue(text: CharSequence?, triple: ColorOsBatteryTriple?, identityConfirmed: Boolean = false): String? {
         val raw = text?.toString()?.trim().orEmpty()
         if (raw.isEmpty() || triple == null) return null
         val separator = raw.indexOfAny(charArrayOf('：', ':'))
@@ -85,7 +85,7 @@ internal object ColorOsSettingsBatteryText {
         // 宿主单值来自模块写入系统的某一只耳机电量（真机见过 `98%` 对应左 97 / 右 98）；
         // 与任何一只在线耳机都对不上，说明这一行是别的蓝牙设备。
         val hostValue = match.groupValues[1].toIntOrNull() ?: return null
-        if (listOfNotNull(triple.left, triple.right).none { it.coerceIn(0, 100) == hostValue }) return null
+        if (!identityConfirmed && listOfNotNull(triple.left, triple.right).none { it.coerceIn(0, 100) == hostValue }) return null
         val parts = buildList {
             triple.left?.let { add("左 ${it.coerceIn(0, 100)}%") }
             triple.right?.let { add("右 ${it.coerceIn(0, 100)}%") }

@@ -51,26 +51,9 @@ internal fun seedlingTripleText(
 
 private const val MAX_SEEDLING_TEXT_LENGTH = 96
 
-/** 设备名配对的最短长度，避免 `Free` 这类片段命中别人的卡。 */
-private const val MIN_POD_NAME_LENGTH = 4
-
-/**
- * 这张 seedling 卡片是不是我们的耳机。
- *
- * 卡片参数里既有 `deviceId`（宿主用 `md5(大写 MAC)`）也有 `primaryInfo`（设备名），两个条件命中
- * 一个即可。**必须先判掉身份再改写**：`SeedlingCardData` 是所有设备共用的模型，不判身份就会把
- * 别人的设备卡（比如手机卡片上的 `85%`）也换成我们耳机的数字。
- */
-internal fun seedlingCardMentionsPod(values: List<String?>, pod: ColorOsPodBattery?): Boolean {
-    if (pod == null) return false
-    val strings = values.filterNotNull()
-    if (strings.isEmpty()) return false
-    if (strings.any { ColorOsHomeCardBattery.matchesDeviceId(it, pod.address) }) return true
-    val podName = pod.name ?: return false
-    return strings.any { value ->
-        value.length >= MIN_POD_NAME_LENGTH && ColorOsHomeCardBattery.matches(value, podName)
-    }
-}
+/** seedling 卡片有设备 id 时必须匹配 id，没有 id 才按完整型号名匹配。 */
+internal fun seedlingCardMentionsPod(values: List<String?>, pod: ColorOsPodBattery?): Boolean =
+    pod != null && colorOsPodForIdentity(listOf(pod), identities = values, names = values) != null
 
 /** 完整匹配连接态，避免 Disconnected 被 Connected 的子串命中。 */
 private val CAPSULE_CONNECTION_LABELS = setOf(

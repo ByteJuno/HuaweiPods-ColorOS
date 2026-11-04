@@ -44,6 +44,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import moe.chenxy.huaweipods.R
 import moe.chenxy.huaweipods.config.ConfigManager
+import moe.chenxy.huaweipods.pods.FreeClipControlKey
 import moe.chenxy.huaweipods.pods.FreeBudsPro3GestureToggle
 import moe.chenxy.huaweipods.pods.FreeBudsPro3LongPressAction
 import moe.chenxy.huaweipods.pods.HuaweiDeviceRoute
@@ -89,7 +90,7 @@ fun HuaweiGestureControls(
         mutableStateOf(prefs.getBoolean(wearDetectionKey, true))
     }
     HuaweiGestureReadbackEffect(
-        enabled = route.supportsGestureStateReadback(),
+        enabled = route != HuaweiDeviceRoute.HUAWEI_FREECLIP && route.supportsGestureStateReadback(),
         route = route,
         address = address,
     ) { update ->
@@ -115,7 +116,9 @@ fun HuaweiGestureControls(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
             )
 
-            if (layout.tapKinds.isNotEmpty()) {
+            if (route == HuaweiDeviceRoute.HUAWEI_FREECLIP) {
+                FreeClipGesturePreferences(address)
+            } else if (layout.tapKinds.isNotEmpty()) {
                 GestureSectionTitle(R.string.huawei_gesture_tap_section)
                 layout.tapKinds.forEach { kind ->
                     HuaweiGestureSide.entries.forEach { side ->
@@ -198,6 +201,29 @@ fun HuaweiGestureControls(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun FreeClipGesturePreferences(address: String) {
+    val controls = rememberFreeClipControls(address)
+    val state = controls.state
+    FreeClipControlStatus(controls)
+    GestureSectionTitle(R.string.huawei_gesture_tap_section)
+    FreeClipControlKey.entries.filter { it.kind != null && it.side != null }.forEach { key ->
+        val kind = requireNotNull(key.kind)
+        val side = requireNotNull(key.side)
+        val actions = remember(key) { HuaweiTapAction.availableFor(HuaweiDeviceRoute.HUAWEI_FREECLIP, kind) }
+        FreeClipChoicePreference(
+            controls = controls,
+            title = stringResource(tapTitleRes(kind, side)),
+            selected = actions.firstOrNull { it.extraValue == state.values[key] },
+            values = actions,
+            label = { stringResource(it.labelRes()) },
+            onSelected = { action, complete ->
+                controls.write(key, action.extraValue, complete)
+            },
+        )
     }
 }
 

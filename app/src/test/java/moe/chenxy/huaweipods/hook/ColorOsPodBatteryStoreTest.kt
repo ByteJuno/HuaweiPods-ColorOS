@@ -63,6 +63,18 @@ class ColorOsPodBatteryStoreTest {
         assertEquals(0, ColorOsPodBatteryStore.size())
     }
 
+    @Test fun `a numeric update from another consumer preserves the device name for that address`() {
+        ColorOsPodBatteryStore.put(pod().copy(name = "HUAWEI FreeClip"))
+        ColorOsPodBatteryStore.put(pod(left = 99))
+        assertEquals("HUAWEI FreeClip", ColorOsPodBatteryStore.get("30:A9:98:CB:C4:54")?.name)
+        assertEquals(99, ColorOsPodBatteryStore.get("30:A9:98:CB:C4:54")?.left)
+        ColorOsPodBatteryStore.put(pod(address = "AA:BB:CC:DD:EE:02"))
+        assertNull(ColorOsPodBatteryStore.get("AA:BB:CC:DD:EE:02")?.name)
+        ColorOsPodBatteryStore.clear("30:A9:98:CB:C4:54")
+        ColorOsPodBatteryStore.put(pod())
+        assertNull(ColorOsPodBatteryStore.get("30:A9:98:CB:C4:54")?.name)
+    }
+
     @Test
     fun `triple keeps whatever part is online`() {
         assertNull(colorOsBatteryTriple(null))
