@@ -98,6 +98,18 @@ internal object BottomPopupSessions {
         session.takeIf { isActive(it) }
     }.getOrNull()
 
+    /** Saved Activity state is only an association, never a replacement launch credential. */
+    fun restore(context: Context, sessionId: String?): BottomPopupSession? = runCatching {
+        if (sessionId == null || !isEnabled(context)) return null
+        val session = synchronized(lock) {
+            val candidate = current ?: return null
+            // An unconsumed registration must still go through consume(), including its TTL.
+            if (candidate.id != sessionId || candidate.launchToken != null) return null
+            candidate
+        }
+        session.takeIf { isActive(it) }
+    }.getOrNull()
+
     fun isCurrent(session: BottomPopupSession): Boolean = synchronized(lock) { current === session }
 
     /** Generation and connection ownership are checked in the Bluetooth host, not inferred from MAC. */

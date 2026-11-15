@@ -77,8 +77,13 @@ class BottomPopupActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val prefs = getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        // The target comes from UID-authenticated registration, never from an arbitrary device extra.
-        val initial = BottomPopupSessions.consume(this, intent)
+        // Only a fresh launch consumes a credential. Android-supplied saved state may reattach
+        // an already authorized session, but cannot authorize a pending or replaced session.
+        val initial = if (savedInstanceState == null) {
+            BottomPopupSessions.consume(this, intent)
+        } else {
+            BottomPopupSessions.restore(this, savedInstanceState.getString(STATE_SESSION_ID))
+        }
         if (initial == null) {
             finish()
             return
@@ -98,12 +103,23 @@ class BottomPopupActivity : ComponentActivity() {
                     key(session.id) {
                         BottomPopupContent(
                             session = session,
-                            onFinish = { finish() },
+                            onFinish = { finishSession(session) },
                         )
                     }
                 }
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        popupSession?.let { outState.putString(STATE_SESSION_ID, it.id) }
+        super.onSaveInstanceState(outState)
+    }
+
+    internal fun finishSession(session: BottomPopupSession) {
+        // onNewIntent can run before Compose removes the old key and cancels its exit delay.
+        // Compare session objects, not device addresses (a reconnect is a new session too).
+        if (popupSession === session) finish()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -115,6 +131,7 @@ class BottomPopupActivity : ComponentActivity() {
     }
 }
 
+private const val STATE_SESSION_ID = "bottom_popup_authorized_session_id"
 private const val AUTO_DISMISS_MS = 6000L
 private const val ANIM_MS = 280
 
