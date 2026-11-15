@@ -1,7 +1,6 @@
 package moe.chenxy.huaweipods
 
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -46,8 +45,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import moe.chenxy.huaweipods.broadcast.HuaweiPodsBroadcastTrustPolicy
 import moe.chenxy.huaweipods.config.ConfigManager
-import moe.chenxy.huaweipods.config.DeviceRoutePrefs
 import moe.chenxy.huaweipods.pods.hasChargingCase
 import moe.chenxy.huaweipods.ui.AppTheme
 import moe.chenxy.huaweipods.ui.components.PodStatus
@@ -55,6 +54,7 @@ import moe.chenxy.huaweipods.utils.PodImageLoader
 import moe.chenxy.huaweipods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.huaweipods.utils.miuiStrongToast.data.HuaweiPodsAction
 import moe.chenxy.huaweipods.utils.miuiStrongToast.data.addHuaweiPodsAction
+import moe.chenxy.huaweipods.utils.miuiStrongToast.data.sendIdentitySharingBroadcast
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
@@ -71,20 +71,19 @@ class BottomPopupActivity : ComponentActivity() {
         super.attachBaseContext(newBase)
     }
 
-    private var popupTarget by mutableStateOf<PopupDeviceTarget?>(null)
+    private var popupSession by mutableStateOf<BottomPopupSession?>(null)
 
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val prefs = getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        val initial = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
-            ?.let { resolveTarget(it, prefs) }
+        // The target comes from UID-authenticated registration, never from an arbitrary device extra.
+        val initial = BottomPopupSessions.consume(this, intent)
         if (initial == null) {
             finish()
             return
         }
-        popupTarget = initial
+        popupSession = initial
 
         setContent {
             val colorSchemeMode = when (prefs.getInt("theme_mode", 0)) {
@@ -93,12 +92,12 @@ class BottomPopupActivity : ComponentActivity() {
                 else -> ColorSchemeMode.System
             }
             AppTheme(colorSchemeMode = colorSchemeMode, accentMode = prefs.getInt("accent_mode", 0)) {
-                val target = popupTarget
-                if (target != null) {
-                    // 切换设备时重建卡片状态，同时取消旧设备尚未结束的关闭任务。
-                    key(target.address) {
+                val session = popupSession
+                if (session != null) {
+                    // 同地址重连也属于新会话，不能继承旧电量或关闭计时。
+                    key(session.id) {
                         BottomPopupContent(
-                            target = target,
+                            session = session,
                             onFinish = { finish() },
                         )
                     }
@@ -107,30 +106,12 @@ class BottomPopupActivity : ComponentActivity() {
         }
     }
 
-    // singleTop：旧弹窗未关闭时连接另一设备，复用本 Activity，更新设备信息，
-    // 卡片内部会据此重置电量与自动关闭计时。
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        val prefs = getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        val newTarget = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
-            ?.let { resolveTarget(it, prefs) } ?: return
-        popupTarget = newTarget
+        // Invalid/replayed launches must not replace a legitimate visible card.
+        val newSession = BottomPopupSessions.consume(this, intent) ?: return
+        popupSession = newSession
         setIntent(intent)
-    }
-
-    private fun Intent.parcelableDevice(key: String): BluetoothDevice? =
-        getParcelableExtra(key, BluetoothDevice::class.java)
-
-    @SuppressLint("MissingPermission")
-    private fun resolveTarget(device: BluetoothDevice, prefs: android.content.SharedPreferences): PopupDeviceTarget? {
-        val address = runCatching { device.address }.getOrNull() ?: return null
-        val deviceName = runCatching {
-            device.name?.takeIf(String::isNotBlank)
-                ?: device.alias?.takeIf(String::isNotBlank)
-                ?: ""
-        }.getOrDefault("")
-        val route = DeviceRoutePrefs.resolve(prefs = prefs, address = address, deviceName = deviceName)
-        return popupDeviceTargetOrNull(address, deviceName, route)
     }
 }
 
@@ -140,9 +121,10 @@ private const val ANIM_MS = 280
 @SuppressLint("UnspecifiedRegisterReceiverFlag")
 @androidx.compose.runtime.Composable
 private fun BottomPopupContent(
-    target: PopupDeviceTarget,
+    session: BottomPopupSession,
     onFinish: () -> Unit,
 ) {
+    val target = session.target
     val context = LocalContext.current
     val prefs = remember {
         context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
@@ -160,10 +142,14 @@ private fun BottomPopupContent(
         visible = false
     }
 
-    val receiver = remember(target) {
+    val receiver = remember(session) {
         object : BroadcastReceiver() {
             override fun onReceive(c: Context?, intent: Intent?) {
                 intent ?: return
+                // Authenticate before reading identity, session extras or Parcelable battery data.
+                if (!HuaweiPodsBroadcastTrustPolicy.isTrustedBluetoothStateSender(sentFromPackage)) return
+                if (finished || !BottomPopupSessions.isCurrent(session)) return
+                if (intent.getStringExtra(BottomPopupSessions.EXTRA_SESSION_ID) != session.id) return
                 val identity = PopupBroadcastIdentity(
                     address = intent.getStringExtra("address"),
                     deviceName = intent.getStringExtra("device_name"),
@@ -174,18 +160,23 @@ private fun BottomPopupContent(
                 if (!popupBroadcastMatchesTarget(target, identity)) return
                 when (HuaweiPodsAction.canonical(intent.action)) {
                     HuaweiPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
+                        if (!BottomPopupSessions.isEnabled(context) || !BottomPopupSessions.isActive(session)) {
+                            close()
+                            return
+                        }
                         intent.getParcelableExtra("status", BatteryParams::class.java)?.let {
                             battery = it
                         }
                     }
+                    // The authenticated terminal event closes exactly this session. Its host may
+                    // already have invalidated the validator before broadcast delivery completes.
                     HuaweiPodsAction.ACTION_PODS_DISCONNECTED -> close()
                 }
             }
         }
     }
 
-    // 绑定 target：设备切换时反注册旧广播、为新设备重新注册并请求一次状态。
-    DisposableEffect(target) {
+    DisposableEffect(session) {
         context.registerReceiver(
             receiver,
             IntentFilter().apply {
@@ -194,10 +185,9 @@ private fun BottomPopupContent(
             },
             Context.RECEIVER_EXPORTED,
         )
-        // 让蓝牙进程立即回推一次当前状态，避免卡片先显示空电量。
-        context.sendBroadcast(Intent(HuaweiPodsAction.ACTION_REFRESH_STATUS).apply {
+        context.sendIdentitySharingBroadcast(Intent(HuaweiPodsAction.ACTION_REFRESH_STATUS).apply {
             putPopupTarget(target)
-            setPackage("com.android.bluetooth")
+            setPackage(HuaweiPodsBroadcastTrustPolicy.PACKAGE_BLUETOOTH)
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
         onDispose {
@@ -205,20 +195,23 @@ private fun BottomPopupContent(
         }
     }
 
-    // 进场：首帧布局完成后再滑入。
-    LaunchedEffect(Unit) {
+    // Recheck after receiver registration and while visible, including host death/hot reload.
+    LaunchedEffect(session) {
+        if (!BottomPopupSessions.isEnabled(context) || !BottomPopupSessions.isActive(session)) {
+            close()
+            return@LaunchedEffect
+        }
         visible = true
+        while (!finished) {
+            kotlinx.coroutines.delay(500L)
+            if (!BottomPopupSessions.isEnabled(context) || !BottomPopupSessions.isActive(session)) close()
+        }
     }
-    // 切换到新设备：先清空旧电量，等新设备的广播回填。
-    LaunchedEffect(target.address) {
+    LaunchedEffect(session.id) {
         battery = BatteryParams()
-    }
-    // 自动关闭；key 为设备地址，切换设备时重新计时。
-    LaunchedEffect(target.address) {
         kotlinx.coroutines.delay(AUTO_DISMISS_MS)
         close()
     }
-    // 退出动画播完后真正结束 Activity。
     LaunchedEffect(finished) {
         if (finished) {
             kotlinx.coroutines.delay(ANIM_MS.toLong() + 30L)
