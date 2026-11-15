@@ -199,6 +199,9 @@ internal fun MainUI(
     val prefs = remember { context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE) }
     val lifecyclePrefs = remember(context) { AppLifecyclePrefs(context) }
     val appConfig = remember { ConfigManager.refreshFromPrefs(prefs) }
+    val bottomPopupEnabled = remember {
+        mutableStateOf(appConfig.bottomPopupEnabled)
+    }
     val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
     val moreClickAction = remember { mutableStateOf(appConfig.moreClickAction) }
     val desktopIconHidden = remember { mutableStateOf(isLauncherIconHidden(context)) }
@@ -1228,6 +1231,12 @@ internal fun MainUI(
                         onAppLanguageChange = {
                             appLanguage.value = it
                             onAppLanguageChange(it)
+                        },
+                        bottomPopupEnabled = bottomPopupEnabled,
+                        onBottomPopupEnabledChange = {
+                            bottomPopupEnabled.value = it
+                            ConfigManager.updateBottomPopupEnabled(prefs, xposedService, it)
+                            broadcastConfigChanged(context, "com.android.bluetooth")
                         },
                         notificationClickAction = notificationClickAction,
                         onNotificationClickActionChange = {
