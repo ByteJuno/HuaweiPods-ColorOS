@@ -19,6 +19,7 @@ data class AppConfig(
      * 默认 0（全关）：宿主的多段布局是给 AirPods 准备的，没验证过就不要替用户打开。
      */
     val multiBatteryMask: Int = 0,
+    val bottomPopupEnabled: Boolean = false,
 )
 
 object ConfigManager {
@@ -33,6 +34,7 @@ object ConfigManager {
     const val PREF_KEY_MORE_CLICK_ACTION = "more_click_action"
     const val PREF_KEY_LOW_BATTERY_REMINDER_ENABLED = "low_battery_reminder_enabled"
     const val PREF_KEY_MULTI_BATTERY_MASK = "multi_battery_mask"
+    const val PREF_KEY_BOTTOM_POPUP_ENABLED = "bottom_popup_enabled"
     const val MULTI_BATTERY_DTO_BIT = 1
     const val MULTI_BATTERY_CARD_BIT = 2
     const val MULTI_BATTERY_MASK_MAX = MULTI_BATTERY_DTO_BIT or MULTI_BATTERY_CARD_BIT
@@ -82,6 +84,8 @@ object ConfigManager {
 
     fun lowBatteryReminderEnabled(): Boolean = current().lowBatteryReminderEnabled
 
+    fun bottomPopupEnabled(): Boolean = current().bottomPopupEnabled
+
     /** 设备空间三段电量的位掩码，见 [AppConfig.multiBatteryMask]。 */
     fun multiBatteryMask(): Int = current().multiBatteryMask
 
@@ -128,6 +132,14 @@ object ConfigManager {
         save(prefs, service, config)
     }
 
+    fun updateBottomPopupEnabled(
+        prefs: SharedPreferences,
+        service: XposedService?,
+        enabled: Boolean,
+    ) {
+        save(prefs, service, current().copy(bottomPopupEnabled = enabled))
+    }
+
     fun save(prefs: SharedPreferences, config: AppConfig) {
         val oldConfig = cachedConfig
         val normalized = config.normalized()
@@ -171,6 +183,7 @@ object ConfigManager {
             .putInt(PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
             .putBoolean(PREF_KEY_LOW_BATTERY_REMINDER_ENABLED, config.lowBatteryReminderEnabled)
             .putInt(PREF_KEY_MULTI_BATTERY_MASK, config.multiBatteryMask)
+            .putBoolean(PREF_KEY_BOTTOM_POPUP_ENABLED, config.bottomPopupEnabled)
             .commit()
     }
 
@@ -186,6 +199,7 @@ object ConfigManager {
         val directMoreClickAction = prefs.getInt(PREF_KEY_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val directLowBatteryReminderEnabled = prefs.booleanOrNull(PREF_KEY_LOW_BATTERY_REMINDER_ENABLED)
         val directMultiBatteryMask = prefs.getInt(PREF_KEY_MULTI_BATTERY_MASK, Int.MIN_VALUE)
+        val directBottomPopupEnabled = prefs.booleanOrNull(PREF_KEY_BOTTOM_POPUP_ENABLED)
         val raw = prefs.getString(PREF_KEY_CONFIG_JSON, null)
         logPrefsSnapshot(source, prefs, raw)
         val config = raw?.let {
@@ -201,6 +215,7 @@ object ConfigManager {
             moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.moreClickAction,
             lowBatteryReminderEnabled = directLowBatteryReminderEnabled ?: config.lowBatteryReminderEnabled,
             multiBatteryMask = directMultiBatteryMask.takeIf { it != Int.MIN_VALUE } ?: config.multiBatteryMask,
+            bottomPopupEnabled = directBottomPopupEnabled ?: config.bottomPopupEnabled,
         ).normalized()
     }
 
@@ -278,6 +293,12 @@ object ConfigManager {
             }
             if (oldConfig.multiBatteryMask != newConfig.multiBatteryMask) {
                 add("multiBatteryMask=${oldConfig.multiBatteryMask}->${newConfig.multiBatteryMask}")
+            }
+            if (oldConfig.bottomPopupEnabled != newConfig.bottomPopupEnabled) {
+                add(
+                    "bottomPopupEnabled=${oldConfig.bottomPopupEnabled}->" +
+                        newConfig.bottomPopupEnabled,
+                )
             }
         }
     }

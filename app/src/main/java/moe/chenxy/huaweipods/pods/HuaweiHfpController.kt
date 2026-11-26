@@ -17,6 +17,9 @@ import android.os.SystemClock
 import java.util.UUID
 import moe.chenxy.huaweipods.BuildConfig
 import moe.chenxy.huaweipods.broadcast.HuaweiPodsBroadcastTrustPolicy
+import moe.chenxy.huaweipods.BottomPopupActivity
+import moe.chenxy.huaweipods.BottomPopupAutoShowPolicy
+import moe.chenxy.huaweipods.BottomPopupSessions
 import moe.chenxy.huaweipods.config.ConfigManager
 import moe.chenxy.huaweipods.config.LowLatencyPrefs
 import moe.chenxy.huaweipods.hook.ColorOsSystemBatteryBridge
@@ -100,6 +103,8 @@ object HuaweiHfpController {
     private var lowLatencyAppliedGeneration: Long? = null
     private val lowLatencyWritePolicy = LowLatencyWritePolicy()
     private val freeClip2AudioStateTracker = FreeClip2AudioStateTracker()
+    private val bottomPopupAutoShowPolicy = BottomPopupAutoShowPolicy()
+    private var bottomPopupSessionId = ""
     private val freeBuds3SnapshotStore = FreeBuds3StateSnapshotStore()
     private val sessionStateLock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -469,7 +474,11 @@ object HuaweiHfpController {
         }
     }
 
-    fun connectPod(context: Context, device: BluetoothDevice) {
+    fun connectPod(
+        context: Context,
+        device: BluetoothDevice,
+        isSessionRestore: Boolean = false,
+    ) {
         val route = device.huaweiDeviceRoute()
         if (!route.isSupported) {
             Log.w(TAG, "Huawei session skipped: unsupported device=${device.address}")
@@ -477,6 +486,8 @@ object HuaweiHfpController {
         }
         val restoredCachedBattery = synchronized(sessionStateLock) {
             ensureSession(context, device, route)
+            // 同一代次的重复 connectPod 不得把恢复会话升级为允许自动弹窗。
+            bottomPopupAutoShowPolicy.beginSession(sessionGeneration, isSessionRestore)
             val restored = restoreFreeBuds3StateAfterProcessRestart(context, device, route)
             sendConnectionState("connecting")
             sendConnected()
@@ -485,9 +496,14 @@ object HuaweiHfpController {
             restored?.battery != null
         }
         if (restoredCachedBattery) scheduleCachedNotificationRestore()
+        // 开盖即弹：仅在真实新连接时弹出底部卡片；模块热重载/进程重启恢复已有连接
+        // （isSessionRestore=true）时不弹窗，避免用户没有重新开盖却被打扰。
+        // 卡片不等待较慢的 RFCOMM 电量查询，电量稍后通过广播自动回填。
+        maybeShowBottomPopup(context, device)
+        // 电量查询提到 RFCOMM 队列最前，让流体云与弹窗尽早拿到真实电量，不再被其他查询阻塞。
+        requestPrivateBattery()
         requestOfficialImageIdentity(force = true)
         requestAncState(force = true)
-        requestPrivateBattery()
         scheduleAutoLowLatency()
         if (route == HuaweiDeviceRoute.HUAWEI_FREECLIP2) {
             requestFreeClip2AudioState(force = true)
@@ -599,6 +615,7 @@ object HuaweiHfpController {
             sendConnected()
             sendBattery(battery)
             MiuiStrongToastUtil.showPodsNotificationByMiuiBt(context, battery, device)
+            maybeShowBottomPopup(context, device)
             Log.i(TAG, "Huawei battery parsed device=${device.address} values=${result.values}")
             battery
         }
@@ -1407,6 +1424,7 @@ object HuaweiHfpController {
             HuaweiL2capAncController.disconnect(previousDevice)
         }
         if (newSession) {
+            bottomPopupSessionId = UUID.randomUUID().toString()
             FreeClipControlHost.reset()
             // elapsedRealtime can tie during rapid reconnect; keep the wire epoch strictly ordered.
             freeClipSessionEpoch = maxOf(SystemClock.elapsedRealtime(), freeClipSessionEpoch + 1L)
@@ -1529,6 +1547,7 @@ object HuaweiHfpController {
                             normalizedBattery,
                             activeDevice,
                         )
+                        maybeShowBottomPopup(currentContext, activeDevice)
                         Log.i(TAG, "Huawei RFCOMM battery updated device=$requestedAddress")
                     }
                 }
@@ -1917,6 +1936,53 @@ object HuaweiHfpController {
         backgroundBatteryRefreshActive = false
         batteryRequestInFlight = false
         mainHandler.removeCallbacks(backgroundBatteryRefreshRunnable)
+    }
+
+    private fun maybeShowBottomPopup(
+        context: Context,
+        device: BluetoothDevice,
+    ) {
+        val generation: Long
+        val address: String
+        val route: HuaweiDeviceRoute
+        val sessionId: String
+        synchronized(sessionStateLock) {
+            if (!this.device?.address.equals(device.address, ignoreCase = true)) return
+            generation = sessionGeneration
+            address = device.address
+            route = sessionRoute
+            sessionId = bottomPopupSessionId
+            if (!bottomPopupAutoShowPolicy.claim(generation, ConfigManager.bottomPopupEnabled())) return
+        }
+        runCatching {
+            val validator = BottomPopupSessions.createHostValidator(context) {
+                synchronized(sessionStateLock) {
+                    isCurrentSession(generation, address, route) &&
+                        bottomPopupSessionId == sessionId &&
+                        bottomPopupAutoShowPolicy.isAllowed(generation) &&
+                        ConfigManager.bottomPopupEnabled()
+                }
+            }
+            val token = BottomPopupSessions.requestLaunchToken(
+                context = context,
+                sessionId = sessionId,
+                address = address,
+                deviceName = device.notificationDisplayName(),
+                route = route,
+                validator = validator,
+            ) ?: return
+            val intent = Intent().apply {
+                // 模块运行在 Bluetooth UID；凭据由模块 Provider 验证真实调用 UID 后签发。
+                setClassName(BuildConfig.APPLICATION_ID, BottomPopupActivity::class.java.name)
+                putExtra(BottomPopupSessions.EXTRA_LAUNCH_TOKEN, token)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        }.onSuccess {
+            Log.i(TAG, "Huawei bottom popup requested device=${device.address}")
+        }.onFailure {
+            Log.e(TAG, "Bottom popup launch failed safely device=${device.address}", it)
+        }
     }
 
     private fun requestAncState(
@@ -2598,6 +2664,8 @@ object HuaweiHfpController {
         val currentDevice = device
         Intent(action).apply {
             putExtra("vendor", "huawei")
+            // 仅用于关联会话，不是启动凭据；发送方仍必须通过广播信任策略认证。
+            putExtra(BottomPopupSessions.EXTRA_SESSION_ID, bottomPopupSessionId)
             putExtra(HuaweiPodsAction.EXTRA_EVENT_ELAPSED_REALTIME, SystemClock.elapsedRealtime())
             encodeHuaweiDeviceRouteForBroadcast(sessionRoute)?.let {
                 putExtra(HuaweiPodsAction.EXTRA_DEVICE_ROUTE, it)

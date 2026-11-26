@@ -350,7 +350,7 @@ object HeadsetStateDispatcher : HookContext() {
                         setHeadsetIcon(context, true, "audio-profile")
                         startIconWatchdog(context)
                         if (decision == AudioSessionDecision.CONNECT) {
-                            HuaweiHfpController.connectPod(context, device)
+                            HuaweiHfpController.connectPod(context, device, isSessionRestore = restore)
                             savedState?.let(HuaweiHfpController::restoreHotReloadState)
                         }
                     }
