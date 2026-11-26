@@ -257,12 +257,15 @@ class ColorOsLiveAlertReceiver : BroadcastReceiver() {
             name = intent.getStringExtra("device_name"),
             fallback = route?.displayName ?: context.getString(R.string.coloros_live_alert_fallback_title),
         )
+        val reportedAncMode = NoiseControlMode.fromBroadcastStatus(
+            intent.getIntExtra("anc_status", NoiseControlMode.UNKNOWN.broadcastStatus),
+        ).takeIf { intent.hasExtra("anc_status") && it.isKnown() }
         val card = LiveAlertCard(
             address = address,
             title = title,
             route = route,
             battery = battery,
-            noiseMode = readPersistedNoiseMode(statePrefs, address),
+            noiseMode = reportedAncMode ?: readPersistedNoiseMode(statePrefs, address),
             deviceName = intent.getStringExtra("device_name"),
         )
         // 卡片按钮与状态文字要在后续 ANC / 低时延广播里重建，因此把当前卡片内容存下来。
@@ -483,15 +486,32 @@ class ColorOsLiveAlertReceiver : BroadcastReceiver() {
      */
     private fun refreshLiveAlertCard(context: Context, intent: Intent) {
         val statePrefs = context.getSharedPreferences(STATE_PREFS, Context.MODE_PRIVATE)
-        val card = readLiveAlertCard(statePrefs) ?: return
-        val eventAddress = intent.getStringExtra("address")?.uppercase()
-        if (eventAddress != null && !eventAddress.equals(card.address, ignoreCase = true)) return
+        val eventAddress = intent.getStringExtra("address")?.uppercase()?.takeIf(String::isNotBlank)
         val action = HuaweiPodsAction.canonical(intent.action)
+        val reportedMode = if (action == HuaweiPodsAction.ACTION_PODS_ANC_CHANGED) {
+            NoiseControlMode.fromBroadcastStatus(intent.getIntExtra("status", 0)).also { mode ->
+                if (!mode.isKnown()) return
+                // 首次连接时 ANC 回读可能早于第一包电量到达；先把档位按地址记下，电量卡片建立时即可直接消费。
+                val targetAddress = resolveLiveAlertNoiseTargetAddress(
+                    eventAddress = eventAddress,
+                    cardAddress = statePrefs.getString(KEY_CARD_ADDRESS, null),
+                    currentAddress = statePrefs.getString(KEY_CURRENT_ADDRESS, null),
+                )
+                if (targetAddress != null) {
+                    statePrefs.edit()
+                        .putString(KEY_CARD_ADDRESS, targetAddress)
+                        .putInt(KEY_CARD_NOISE, mode.broadcastStatus)
+                        .apply()
+                }
+            }
+        } else {
+            null
+        }
+        val card = readLiveAlertCard(statePrefs) ?: return
+        if (eventAddress != null && !eventAddress.equals(card.address, ignoreCase = true)) return
         val updated = when (action) {
             HuaweiPodsAction.ACTION_PODS_ANC_CHANGED -> {
-                val mode = NoiseControlMode.fromBroadcastStatus(intent.getIntExtra("status", 0))
-                if (!mode.isKnown()) return
-                statePrefs.edit().putInt(KEY_CARD_NOISE, mode.broadcastStatus).apply()
+                val mode = reportedMode ?: return
                 if (mode == card.noiseMode) return
                 LiveAlertCard(card.address, card.title, card.route, card.battery, mode, card.deviceName)
             }

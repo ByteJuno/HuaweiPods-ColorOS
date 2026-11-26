@@ -30,4 +30,23 @@ class HeadsetLifecycleBroadcastTest {
             HuaweiPodsAction.ACTION_MODULE_BLUETOOTH_SERVICE_ALIVE,
             HuaweiPodsAction.ACTION_PODS_ANC_CHANGED).forEach { assertFalse(isHeadsetLifecycleAction(it)) }
     }
+
+    @Test fun ancAndLowLatencyStateUpdatesRouteToLiveAlertWithoutColdStart() {
+        listOf(
+            HuaweiPodsAction.ACTION_PODS_ANC_CHANGED,
+            HuaweiPodsAction.ACTION_HUAWEI_LOW_LATENCY_CHANGED,
+        ).forEach { action ->
+            assertTrue(isLiveAlertStateAction(action))
+            assertFalse(isHeadsetLifecycleAction(action))
+        }
+        listOf(
+            null,
+            "",
+            HuaweiPodsAction.ACTION_REFRESH_STATUS,
+            HuaweiPodsAction.ACTION_PODS_BATTERY_CHANGED,
+            HuaweiPodsAction.ACTION_HUAWEI_ANC_LEVEL_CHANGED,
+        ).forEach { action ->
+            assertFalse(isLiveAlertStateAction(action))
+        }
+    }
 }

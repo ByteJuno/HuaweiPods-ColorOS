@@ -37,6 +37,28 @@ internal fun colorOsLiveAlertNextNoiseMode(
     return options[(index + 1) % options.size]
 }
 
+/**
+ * 确定降噪状态广播在流体云持久化中的目标设备地址。
+ *
+ * 首次连接时 ANC 回读可能早于第一包电量到达，此时卡片尚未持久化（`cardAddress` 为空），
+ * 允许落到已建立的 `currentAddress`；若已有卡片地址且与事件地址冲突，则拒绝覆盖。
+ */
+internal fun resolveLiveAlertNoiseTargetAddress(
+    eventAddress: String?,
+    cardAddress: String?,
+    currentAddress: String?,
+): String? {
+    val normalizedEvent = eventAddress?.trim()?.uppercase()?.takeIf(String::isNotEmpty)
+    val normalizedCard = cardAddress?.trim()?.uppercase()?.takeIf(String::isNotEmpty)
+    val normalizedCurrent = currentAddress?.trim()?.uppercase()?.takeIf(String::isNotEmpty)
+    if (normalizedEvent != null) {
+        if (normalizedCard != null && normalizedCard != normalizedEvent) return null
+        if (normalizedCard == null && normalizedCurrent != null && normalizedCurrent != normalizedEvent) return null
+        return normalizedEvent
+    }
+    return normalizedCard ?: normalizedCurrent
+}
+
 internal fun colorOsLiveAlertNoiseActionLabel(context: Context, next: NoiseControlMode): String =
     context.getString(R.string.coloros_live_alert_noise_action, colorOsLiveAlertNoiseLabel(context, next))
 

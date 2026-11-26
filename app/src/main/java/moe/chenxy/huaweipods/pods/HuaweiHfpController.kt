@@ -91,6 +91,7 @@ object HuaweiHfpController {
     private var lastDeviceInfoRequestAt = 0L
     private var batteryRequestInFlight = false
     private var ancRequestInFlight = false
+    private var pendingAncFallbackState: HuaweiAncState? = null
     private var deviceInfoRequestInFlight = false
     private var equalizerStateRequestInFlight = false
     private var deviceIdentityPublishInFlight = false
@@ -216,6 +217,7 @@ object HuaweiHfpController {
         connectedBroadcastSent = false
         batteryRequestInFlight = false
         ancRequestInFlight = false
+        pendingAncFallbackState = null
         equalizerStateRequestInFlight = false
         deviceInfoRequestInFlight = false
         deviceIdentityPublishInFlight = false
@@ -322,7 +324,7 @@ object HuaweiHfpController {
                     if (sessionRoute.supportsAnc) {
                         val requestStarted = requestAncState()
                         synchronized(sessionStateLock) {
-                            if (!requestStarted) {
+                            if (!requestStarted || currentAnc.mode.isKnown()) {
                                 sendAnc(currentAnc, cached = currentAncIsCached)
                             }
                             if (currentAnc.mode == NoiseControlMode.NOISE_CANCELLATION ||
@@ -555,6 +557,7 @@ object HuaweiHfpController {
             lastDeviceInfoRequestAt = 0L
             batteryRequestInFlight = false
             ancRequestInFlight = false
+            pendingAncFallbackState = null
             deviceInfoRequestInFlight = false
             equalizerStateRequestInFlight = false
             deviceIdentityPublishInFlight = false
@@ -707,25 +710,24 @@ object HuaweiHfpController {
                     }
                     return@setAncMode
                 }
+                currentAnc = targetState
+                currentAncIsCached = false
+                rememberAncSubMode(targetState)
+                if (requestedRoute == HuaweiDeviceRoute.HUAWEI_FREEBUDS3) {
+                    freeBuds3SnapshotStore.saveModuleAnc(
+                        context = currentContext,
+                        address = requestedAddress,
+                        route = requestedRoute,
+                        state = targetState,
+                        capturedAtMs = System.currentTimeMillis(),
+                        writerPid = Process.myPid(),
+                        writerBuild = BuildConfig.MODULE_BUILD_ID,
+                        writerBootCount = currentBootCount(currentContext),
+                    )
+                }
+                sendAnc(targetState)
                 if (supportsReadback) {
                     scheduleAncConfirmation(requestedGeneration, requestedAddress, requestedRoute, targetState)
-                } else {
-                    currentAnc = targetState
-                    currentAncIsCached = false
-                    rememberAncSubMode(targetState)
-                    if (requestedRoute == HuaweiDeviceRoute.HUAWEI_FREEBUDS3) {
-                        freeBuds3SnapshotStore.saveModuleAnc(
-                            context = currentContext,
-                            address = requestedAddress,
-                            route = requestedRoute,
-                            state = targetState,
-                            capturedAtMs = System.currentTimeMillis(),
-                            writerPid = Process.myPid(),
-                            writerBuild = BuildConfig.MODULE_BUILD_ID,
-                            writerBootCount = currentBootCount(currentContext),
-                        )
-                    }
-                    sendAnc(targetState)
                 }
             }
         }
@@ -1993,11 +1995,15 @@ object HuaweiHfpController {
         val currentDevice = device ?: return false
         val requestedRoute = sessionRoute
         if (HuaweiAncPackets.currentStateQuery(requestedRoute) == null) return false
-        if (ancRequestInFlight) return true
+        if (ancRequestInFlight) {
+            if (fallbackState != null) pendingAncFallbackState = fallbackState
+            return true
+        }
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastAncRequestAt < ANC_REFRESH_MIN_INTERVAL_MS) return false
         lastAncRequestAt = now
         ancRequestInFlight = true
+        pendingAncFallbackState = fallbackState
         val requestedAddress = currentDevice.address
         val requestedGeneration = sessionGeneration
         HuaweiL2capAncController.requestAncState(
@@ -2007,9 +2013,11 @@ object HuaweiHfpController {
         ) { state ->
             if (!isCurrentSession(requestedGeneration, requestedAddress, requestedRoute)) return@requestAncState
             ancRequestInFlight = false
+            val effectiveFallback = pendingAncFallbackState ?: fallbackState
+            pendingAncFallbackState = null
             if (state == null) {
                 Log.w(TAG, "Huawei ANC state query returned no verified state device=$requestedAddress")
-                fallbackState?.let {
+                effectiveFallback?.let {
                     currentAnc = it
                     currentAncIsCached = false
                     rememberAncSubMode(it)
@@ -2514,9 +2522,11 @@ object HuaweiHfpController {
                 ColorOsSystemBatteryBridge.publish(currentContext, currentDevice, battery, currentInEar)
             }
         }
+        val knownAncMode = currentAnc.mode.takeIf { it.isKnown() }
         sendAppBroadcast(HuaweiPodsAction.ACTION_PODS_BATTERY_CHANGED) {
             putExtra("status", battery)
             putBatteryExtras(battery)
+            knownAncMode?.let { putExtra("anc_status", it.broadcastStatus) }
             if (cached) putExtra(EXTRA_STATE_CACHED, true)
         }
         sendExternalBroadcast(HuaweiPodsAction.ACTION_PODS_BATTERY_CHANGED) {

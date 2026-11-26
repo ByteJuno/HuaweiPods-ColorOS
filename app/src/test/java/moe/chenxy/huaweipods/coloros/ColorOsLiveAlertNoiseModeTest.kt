@@ -40,6 +40,57 @@ class ColorOsLiveAlertNoiseModeTest {
     }
 
     @Test
+    fun `freebuds 5 cycles between noise cancellation and off`() {
+        val route = HuaweiDeviceRoute.HUAWEI_FREEBUDS5
+        assertEquals(
+            NoiseControlMode.NOISE_CANCELLATION,
+            colorOsLiveAlertNextNoiseMode(route, NoiseControlMode.UNKNOWN),
+        )
+        assertEquals(
+            NoiseControlMode.OFF,
+            colorOsLiveAlertNextNoiseMode(route, NoiseControlMode.NOISE_CANCELLATION),
+        )
+        assertEquals(
+            NoiseControlMode.NOISE_CANCELLATION,
+            colorOsLiveAlertNextNoiseMode(route, NoiseControlMode.OFF),
+        )
+    }
+
+    @Test
+    fun `pre-battery anc readback resolves target address from current connection`() {
+        assertEquals(
+            "AA:BB:CC:DD:EE:FF",
+            resolveLiveAlertNoiseTargetAddress(
+                eventAddress = "aa:bb:cc:dd:ee:ff",
+                cardAddress = null,
+                currentAddress = "AA:BB:CC:DD:EE:FF",
+            ),
+        )
+        assertEquals(
+            "AA:BB:CC:DD:EE:FF",
+            resolveLiveAlertNoiseTargetAddress(
+                eventAddress = "aa:bb:cc:dd:ee:ff",
+                cardAddress = "AA:BB:CC:DD:EE:FF",
+                currentAddress = "AA:BB:CC:DD:EE:FF",
+            ),
+        )
+        assertNull(
+            resolveLiveAlertNoiseTargetAddress(
+                eventAddress = "11:22:33:44:55:66",
+                cardAddress = "AA:BB:CC:DD:EE:FF",
+                currentAddress = "AA:BB:CC:DD:EE:FF",
+            ),
+        )
+        assertNull(
+            resolveLiveAlertNoiseTargetAddress(
+                eventAddress = "11:22:33:44:55:66",
+                cardAddress = null,
+                currentAddress = "AA:BB:CC:DD:EE:FF",
+            ),
+        )
+    }
+
+    @Test
     fun `unknown state starts from noise cancellation`() {
         val route = HuaweiDeviceRoute.HUAWEI_FREEBUDS_PRO5
         assertEquals(
