@@ -500,7 +500,7 @@ object HuaweiHfpController {
         // （isSessionRestore=true）时不弹窗，避免用户没有重新开盖却被打扰。
         // 卡片不等待较慢的 RFCOMM 电量查询，电量稍后通过广播自动回填。
         maybeShowBottomPopup(context, device)
-        // 电量查询提到 RFCOMM 队列最前，让超级岛尽早拿到真实电量，不再被其他查询阻塞。
+        // 电量查询提到 RFCOMM 队列最前，让流体云与弹窗尽早拿到真实电量，不再被其他查询阻塞。
         requestPrivateBattery()
         requestOfficialImageIdentity(force = true)
         requestAncState(force = true)
@@ -1942,42 +1942,46 @@ object HuaweiHfpController {
         context: Context,
         device: BluetoothDevice,
     ) {
+        val generation: Long
+        val address: String
+        val route: HuaweiDeviceRoute
+        val sessionId: String
         synchronized(sessionStateLock) {
             if (!this.device?.address.equals(device.address, ignoreCase = true)) return
-            val generation = sessionGeneration
-            val address = device.address
-            val route = sessionRoute
-            val sessionId = bottomPopupSessionId
+            generation = sessionGeneration
+            address = device.address
+            route = sessionRoute
+            sessionId = bottomPopupSessionId
             if (!bottomPopupAutoShowPolicy.claim(generation, ConfigManager.bottomPopupEnabled())) return
-            runCatching {
-                val validator = BottomPopupSessions.createHostValidator(context) {
-                    synchronized(sessionStateLock) {
-                        isCurrentSession(generation, address, route) &&
-                            bottomPopupSessionId == sessionId &&
-                            bottomPopupAutoShowPolicy.isAllowed(generation) &&
-                            ConfigManager.bottomPopupEnabled()
-                    }
+        }
+        runCatching {
+            val validator = BottomPopupSessions.createHostValidator(context) {
+                synchronized(sessionStateLock) {
+                    isCurrentSession(generation, address, route) &&
+                        bottomPopupSessionId == sessionId &&
+                        bottomPopupAutoShowPolicy.isAllowed(generation) &&
+                        ConfigManager.bottomPopupEnabled()
                 }
-                val token = BottomPopupSessions.requestLaunchToken(
-                    context = context,
-                    sessionId = sessionId,
-                    address = address,
-                    deviceName = device.name ?: device.alias ?: "",
-                    route = route,
-                    validator = validator,
-                ) ?: return
-                val intent = Intent().apply {
-                    // 模块运行在 Bluetooth UID；凭据由模块 Provider 验证真实调用 UID 后签发。
-                    setClassName(BuildConfig.APPLICATION_ID, BottomPopupActivity::class.java.name)
-                    putExtra(BottomPopupSessions.EXTRA_LAUNCH_TOKEN, token)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-            }.onSuccess {
-                Log.i(TAG, "Huawei bottom popup requested device=${device.address}")
-            }.onFailure {
-                Log.e(TAG, "Bottom popup launch failed safely device=${device.address}", it)
             }
+            val token = BottomPopupSessions.requestLaunchToken(
+                context = context,
+                sessionId = sessionId,
+                address = address,
+                deviceName = device.notificationDisplayName(),
+                route = route,
+                validator = validator,
+            ) ?: return
+            val intent = Intent().apply {
+                // 模块运行在 Bluetooth UID；凭据由模块 Provider 验证真实调用 UID 后签发。
+                setClassName(BuildConfig.APPLICATION_ID, BottomPopupActivity::class.java.name)
+                putExtra(BottomPopupSessions.EXTRA_LAUNCH_TOKEN, token)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        }.onSuccess {
+            Log.i(TAG, "Huawei bottom popup requested device=${device.address}")
+        }.onFailure {
+            Log.e(TAG, "Bottom popup launch failed safely device=${device.address}", it)
         }
     }
 

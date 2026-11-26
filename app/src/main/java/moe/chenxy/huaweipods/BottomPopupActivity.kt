@@ -122,7 +122,7 @@ class BottomPopupActivity : ComponentActivity() {
         if (popupSession === session) finish()
     }
 
-    override fun onNewIntent(intent: Intent) {
+    public override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // Invalid/replayed launches must not replace a legitimate visible card.
         val newSession = BottomPopupSessions.consume(this, intent) ?: return
