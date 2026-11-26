@@ -25,14 +25,15 @@ HuaweiPods ColorOS 把华为耳机的电量和控制接入 ColorOS 的快速设�
 
 本分支只适配 ColorOS，已移除小米 / HyperOS 集成。HyperOS 用户请使用上游 [HuaweiPods](https://github.com/Nshpiter/HuaweiPods)。
 
-## 当前版本：1.9.3.0
+## 当前版本：1.9.4.0
 
-- 流体云卡片支持降噪切换；在 ColorOS 17 上点击卡片会打开模块耳机弹窗。
-- 蓝牙设置、设备详细信息页、设备空间卡片和控制中心蓝牙磁贴显示左耳 / 右耳 / 耳机盒三段电量。
-- 低时延和佩戴检测开关增加回读确认与超时回滚；断连后清理电量和状态缓存。
-- 修复竖长耳机盒图片在通知和流体云中被裁切的问题（#8）。
+- 一代 FreeClip 在“我的设备”原生详情页新增五行控制面板（双击、三击、音效、左右自适应、掉落提醒），与模块详情页共用蓝牙侧协调器与回读确认快照。
+- 统一跨进程电量身份与多设备 `v2` 快照：蓝牙设置、设备空间与种子卡片按真实 MAC 地址或唯一完整型号匹配，避免多设备电量串改。
+- 同步上游 1.9.4 可选底部滑入连接弹窗（默认关闭），补充按连接代次门禁、一次性会话凭据与发送方 UID 校验。
+- 修复 ColorOS 16 系统蓝牙进程在 `closeProfileProxy` 同步回调 `onServiceDisconnected` 时触发 `ConcurrentModificationException` 导致的蓝牙无限开关 / 重启循环（#9、#14）。
+- 修复流体云卡片与模块耳机弹窗的降噪状态刷新链路，解决 FreeBuds 5 等回读机型卡在“切换到降噪”、无法切回关闭的问题（#13）。
 
-已在 PLK110 / ColorOS 17.0.0.105 与 OPD2515 / ColorOS 17.0.0.103（LSPosed API 102，一代 FreeClip）实测。其他型号尚未在 ColorOS 实机验证。完整变更和验证范围见 [1.9.3.0 发布说明](.github/release-notes/1.9.3.0.md)，历史版本见 [发布说明目录](.github/release-notes/)。
+已在 PLK110 / ColorOS 17.0.0.105 与 OPD2515 / ColorOS 17.0.0.103（LSPosed API 102，一代 FreeClip）实测。其他型号尚未在 ColorOS 实机验证。完整变更和验证范围见 [1.9.4.0 发布说明](.github/release-notes/1.9.4.0.md)，历史版本见 [发布说明目录](.github/release-notes/)。
 
 ## 主要功能
 

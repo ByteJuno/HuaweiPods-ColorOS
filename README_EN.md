@@ -25,14 +25,15 @@ HuaweiPods ColorOS brings Huawei earphone battery and controls to ColorOS Quick 
 
 This fork targets ColorOS only and removes the Xiaomi / HyperOS integrations. HyperOS users should use upstream [HuaweiPods](https://github.com/Nshpiter/HuaweiPods).
 
-## Current release: 1.9.3.0
+## Current release: 1.9.4.0
 
-- Fluid Cloud cards support ANC switching. On ColorOS 17, tapping the card opens the module's earphone popup.
-- Bluetooth settings, the device-details page, Device Space cards and the Control Center Bluetooth tile show left / right / case battery.
-- Low-latency and wear-detection switches confirm by readback and roll back after a timeout. Disconnecting clears cached battery and state.
-- Fixes cropped tall case images in notifications and Fluid Cloud (#8).
+- Adds a compact 5-row native control panel for first-generation FreeClip in My Devices (double-tap, triple-tap, sound preset, adaptive left/right earbuds and drop reminder), sharing a Bluetooth-side coordinator and readback-confirmed snapshot with the module details page.
+- Unifies cross-process battery identity and multi-device `v2` battery snapshots so Bluetooth settings, Device Space and seedling cards match by real MAC address or unambiguous model name without cross-device leakage.
+- Syncs the optional bottom slide-in connection popup from upstream 1.9.4 (disabled by default), hardened with per-connection generation gating, one-time launch tokens and sender UID verification.
+- Fixes a Bluetooth process crash/restart loop on ColorOS 16 caused by synchronous `onServiceDisconnected` re-entry during `BluetoothAdapter.closeProfileProxy` (#9, #14).
+- Fixes the ANC state refresh pipeline for Fluid Cloud cards and the module popup so readback models such as FreeBuds 5 cycle between ANC and Off instead of staying stuck on "Switch to ANC" (#13).
 
-Tested with first-generation FreeClip on PLK110 / ColorOS 17.0.0.105 and OPD2515 / ColorOS 17.0.0.103 (LSPosed API 102). Other models have not been tested on ColorOS devices. See the [1.9.3.0 release notes](.github/release-notes/1.9.3.0.md) for details and the [release notes directory](.github/release-notes/) for older versions.
+Tested with first-generation FreeClip on PLK110 / ColorOS 17.0.0.105 and OPD2515 / ColorOS 17.0.0.103 (LSPosed API 102). Other models have not been tested on ColorOS devices. See the [1.9.4.0 release notes](.github/release-notes/1.9.4.0.md) for details and the [release notes directory](.github/release-notes/) for older versions.
 
 ## Features
 
